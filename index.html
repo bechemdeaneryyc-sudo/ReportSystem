@@ -286,6 +286,70 @@ function guessFieldType(line) {
   if (/(describe|explain|list|activities|challenges|remarks|recommendation|comments|narrat|summary|details of|findings|voices|way forward|impact|outcome)/.test(l) || line.length > 45) return "textarea";
   return "text";
 }
+
+/* ---- Template upload parsing: tell topics/headings apart from real questions ---- */
+// Section headings that organise the form but aren't themselves fillable prompts.
+const TEMPLATE_SECTION_TOPICS = ["secretariat", "activities", "meetings", "challenges/problems", "projections/future plans", "others", "statement of accounts"];
+function isPartMarker(line) { return /^PART\s+[AB]\b/i.test(line.trim()); }
+function isAllCapsHeading(line) {
+  const letters = line.replace(/[^A-Za-z]/g, "");
+  return !!letters && letters === letters.toUpperCase() && !line.includes("[");
+}
+function isKnownTopic(line) { return TEMPLATE_SECTION_TOPICS.includes(line.trim().replace(/[:\-–—]+$/, "").toLowerCase()); }
+function isParentheticalNote(line) { const t = line.trim(); return t.startsWith("(") && t.endsWith(")"); }
+function isBracketOnly(line) { const t = line.trim(); return t.startsWith("[") && t.endsWith("]"); }
+function isGuidanceLine(line) { return /^(list|state|give|name|summarise|summarize|describe|enter|insert|fill in|for each|long[- ]term)\s[a-z]/i.test(line.trim()); }
+function stripBracketLabel(line) {
+  const m = line.match(/\[([^\]]+)\]/);
+  const help = m ? m[1].trim() : null;
+  const label = (line.replace(/\[[^\]]+\]/, "").replace(/:\s*$/, "").trim() || line.trim()).replace(/^[\d.\)\-\s]+/, "").trim();
+  return { label, help };
+}
+// Turns raw text extracted from an uploaded .docx into real fill-in questions:
+// drops section headings/table headers, keeps only Part A (secretary) or Part B
+// (financial secretary/treasurer) content depending on which template slot it's for,
+// and turns bare roster/meeting-table row labels into proper name/phone/date questions.
+function parseTemplateFields(rawText, type) {
+  const rawLines = rawText.split("\n").map((l) => l.trim()).filter((l) => l.length > 1 && !/^[=\-_*]{3,}$/.test(l));
+  const partBIdx = rawLines.findIndex((l) => /^PART\s+B\b/i.test(l));
+  const wantPartB = type === "financial";
+  const lines = wantPartB ? (partBIdx === -1 ? rawLines : rawLines.slice(partBIdx)) : (partBIdx === -1 ? rawLines : rawLines.slice(0, partBIdx));
+
+  const fields = [];
+  let fieldsSinceTopic = 0, lastTopicLabel = null, rosterMode = false, meetingsMode = false;
+  const push = (label, fieldType, help) => { fields.push({ id: uid(), label, type: fieldType || guessFieldType(label), help: help || null }); fieldsSinceTopic++; };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const next = (lines[i + 1] || "").trim();
+    if (isPartMarker(line) || isParentheticalNote(line)) continue;
+
+    if (/^NAME$/i.test(line) && /^POSITION$/i.test(next)) { rosterMode = true; meetingsMode = false; continue; }
+    if (/^MEETINGS$/i.test(line) && /^DATES$/i.test(next)) { meetingsMode = true; rosterMode = false; continue; }
+
+    if (isKnownTopic(line)) { rosterMode = false; meetingsMode = false; lastTopicLabel = line.replace(/:\s*$/, ""); fieldsSinceTopic = 0; continue; }
+
+    if (rosterMode) { if (isAllCapsHeading(line)) continue; push(`${line} — Name`, "text"); push(`${line} — Phone`, "text"); continue; }
+    if (meetingsMode) { if (isAllCapsHeading(line)) continue; push(`${line} — Date`, "date"); push(`${line} — Venue`, "text"); push(`${line} — Key Outcomes/Decisions`, "textarea"); continue; }
+
+    if (isAllCapsHeading(line)) continue;
+    if (/^GHc$/i.test(line)) continue;
+
+    if (isGuidanceLine(line)) {
+      if (fieldsSinceTopic > 0 && fields.length) { const last = fields[fields.length - 1]; last.help = last.help ? `${last.help} ${line}` : line; }
+      else if (lastTopicLabel) push(lastTopicLabel, "textarea", line);
+      continue;
+    }
+
+    if (isBracketOnly(line)) { push(line.slice(1, -1).trim(), "textarea"); continue; }
+
+    const { label, help } = stripBracketLabel(line);
+    if (!label) continue;
+    const fieldType = /^(income|expenditure|balance)$/i.test(label) ? "number" : guessFieldType(label);
+    push(label, fieldType, help);
+  }
+  return fields;
+}
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function todayDisplay() { return new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }); }
 function monthYearDisplay() { return new Date().toLocaleDateString(undefined, { year: "numeric", month: "long" }); }
@@ -625,8 +689,7 @@ const App = {
     try {
       const arrayBuffer = await file.arrayBuffer();
       const [htmlResult, textResult] = await Promise.all([mammoth.convertToHtml({ arrayBuffer }), mammoth.extractRawText({ arrayBuffer })]);
-      const lines = textResult.value.split("\n").map((l) => l.trim()).filter((l) => l.length > 1 && !/^[=\-_*]{3,}$/.test(l));
-      const fields = lines.map((line) => ({ id: uid(), label: line.replace(/^[\d.\)\-\s]+/, "").trim() || line, type: guessFieldType(line) }));
+      const fields = parseTemplateFields(textResult.value, type);
       this.templateDraft[type] = fields;
       this.templateDraftDoc[type] = { html: htmlResult.value, fileName: file.name };
       this.templateUploadFlash = { type, count: fields.length, fileName: file.name };
@@ -806,7 +869,7 @@ function btnHtml({ variant = "primary", extraClass = "", attrs = "", label, icon
   return `<button class="cra-btn ${cls} ${extraClass}" ${attrs}>${iconName ? icon(iconName, size) : ""}${label}</button>`;
 }
 function badge(tone, text, iconName) { return `<span class="cra-badge cra-badge-${tone}">${iconName ? icon(iconName, 11) : ""}${esc(text)}</span>`; }
-function fieldWrap(label, inner) { return `<div><label class="cra-label">${esc(label)}</label>${inner}</div>`; }
+function fieldWrap(label, inner, help) { return `<div><label class="cra-label">${esc(label)}</label>${help ? `<p class="text-xs mb-1" style="color:var(--ink-soft)">${esc(help)}</p>` : ""}${inner}</div>`; }
 function emptyState(iconName, title, hint, actionHtml) {
   return `<div class="col items-center text-center py-14 px-6">
     <div class="cra-seal mb-4" style="width:56px;height:56px">${icon(iconName, 22)}</div>
@@ -1286,7 +1349,7 @@ function templateEditorHtml(type) {
     </div>
     <div class="p-3 mb-4" style="background:#f5f3ea;border-radius:8px;border:1px dashed var(--gold)">
       <div class="cra-label mb-2" style="color:var(--violet)">Upload a Word (.docx) template</div>
-      <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Each line becomes a question below; the layout is reused when building the filled-in PDF.</p>
+      <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Section headings and table headers are skipped automatically, and ${type === "financial" ? "only Part B (Financial Secretary/Treasurer)" : "only Part A (Secretary)"} questions are pulled in; the layout is reused when building the filled-in PDF.</p>
       <div class="row wrap items-center gap-2">
         <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("upload", 14)} ${doc ? "Replace file" : "Choose .docx file"}
           <input type="file" accept=".docx" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.handleDocxUpload('${type}', this.files[0])" /></label>
@@ -1297,7 +1360,7 @@ function templateEditorHtml(type) {
     </div>
     ${fields.length === 0 ? `<p class="text-sm mb-4" style="color:var(--ink-soft)">No fields yet — add questions below.</p>` : `
     <div class="space-y-2 mb-4">
-      ${fields.map((f, i) => `<div class="row items-center gap-2 p-2" style="border:1px solid var(--line);border-radius:8px">${icon("grip", 14)}<span class="cra-mono text-xs" style="width:20px;color:var(--ink-soft)">${String(i + 1).padStart(2, "0")}</span><span class="text-sm font-medium flex-1">${esc(f.label)}</span>${badge("violet", FIELD_TYPES.find((t) => t.value === f.type)?.label || f.type)}<button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.removeTemplateField('${type}','${f.id}')">${icon("trash", 13)}</button></div>`).join("")}
+      ${fields.map((f, i) => `<div class="row items-center gap-2 p-2" style="border:1px solid var(--line);border-radius:8px">${icon("grip", 14)}<span class="cra-mono text-xs" style="width:20px;color:var(--ink-soft)">${String(i + 1).padStart(2, "0")}</span><span class="text-sm font-medium flex-1"${f.help ? ` title="${esc(f.help)}"` : ""}>${esc(f.label)}</span>${badge("violet", FIELD_TYPES.find((t) => t.value === f.type)?.label || f.type)}<button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.removeTemplateField('${type}','${f.id}')">${icon("trash", 13)}</button></div>`).join("")}
     </div>`}
     <div class="row sm-row gap-2 p-3" style="background:#f5f3ea;border-radius:8px;flex-direction:column">
       <input class="cra-input flex-1" placeholder="e.g. Number of new members" value="${esc(draft.label)}" oninput="App.templateDraftInput['${type}'].label=this.value" />
@@ -1352,7 +1415,7 @@ function submitReportFormHtml(type) {
       let input;
       if (f.type === "textarea") input = `<textarea class="cra-textarea" rows="3" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea>`;
       else input = `<input class="cra-input" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}" value="${esc(submitFormValues[f.id] || "")}" />`;
-      return fieldWrap(f.label, input);
+      return fieldWrap(f.label, input, f.help);
     }).join("")}
     ${submitCustomFields.length ? `<div class="cra-label" style="color:var(--violet);padding-top:0.25rem">Your own questions</div>` : ""}
     ${submitCustomFields.map((f) => `<div class="row items-start gap-2">
