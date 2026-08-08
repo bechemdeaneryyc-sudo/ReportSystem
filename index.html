@@ -1124,14 +1124,50 @@ function downloadReport(reportId) {
 
 function signatureBlock(user, label) {
   if (!user) return "";
-  return `<div style="margin-top:10px;display:inline-block;text-align:center">
+  return `<div style="margin-top:10px;display:inline-block;text-align:center;min-width:150px">
     ${user.signatureDataUrl ? `<img src="${user.signatureDataUrl}" style="max-height:40px;max-width:150px;display:block;margin:0 auto 2px" />` : `<div style="height:40px"></div>`}
     <div style="border-top:1px solid #211f2e;padding-top:2px;font-size:10.5px">${esc(user.name)} — ${esc(label)}</div>
   </div>`;
 }
 
+// Every currently-registered executive who shares the report's parish/local scope,
+// in a sensible leadership order — used to auto-fill the signatories table and
+// signature blocks on the downloaded report without the submitter re-typing anything.
+function executivesForReport(report) {
+  const order = POSITIONS; // [ "President", "Vice President", "Secretary", "Financial Secretary", "Treasurer", "Public Relations Officer", "Welfare Officer" ]
+  const execs = App.org.users.filter((u) =>
+    u.level === report.ownerLevel &&
+    (report.ownerLevel === "parish" ? u.parishId === report.ownerId : u.localId === report.ownerId)
+  );
+  return execs.sort((a, b) => {
+    const ia = order.indexOf(a.position), ib = order.indexOf(b.position);
+    return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
+  });
+}
+
+function signatoriesTableHtml(execs) {
+  if (!execs.length) return "";
+  const rows = execs.map((u) => `
+    <tr>
+      <td style="padding:4px 6px;border-bottom:1px solid #d9d4c4;font-size:11.5px">${esc(u.name)}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #d9d4c4;font-size:11.5px;color:#57536b">${esc(u.isAdmin ? "IT Admin" : u.position)}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #d9d4c4;font-size:11.5px">${u.signatureDataUrl ? `<img src="${u.signatureDataUrl}" style="max-height:26px;max-width:110px" />` : `<span style="color:#a39ab0">Not signed</span>`}</td>
+    </tr>`).join("");
+  return `
+    <div style="margin:16px 0 4px 0;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#57536b">Executives on record</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+      <thead><tr>
+        <th style="text-align:left;padding:4px 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.03em;color:#8a8698;border-bottom:1px solid #211f2e">Name</th>
+        <th style="text-align:left;padding:4px 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.03em;color:#8a8698;border-bottom:1px solid #211f2e">Position</th>
+        <th style="text-align:left;padding:4px 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.03em;color:#8a8698;border-bottom:1px solid #211f2e">Signature</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 function buildFilledReportHtml(report, ctx) {
   const submitter = App.org.users.find((u) => u.id === report.submittedBy);
+  const executives = executivesForReport(report);
   const header = `
     ${ctx.parish && ctx.parish.logoDataUrl ? `<div style="text-align:center;margin-bottom:8px"><img src="${ctx.parish.logoDataUrl}" style="height:56px" /></div>` : ""}
     <div style="font-family:'Fraunces',Georgia,serif;text-align:center;margin-bottom:18px">
@@ -1144,6 +1180,7 @@ function buildFilledReportHtml(report, ctx) {
       <tr><td style="padding:2px 0;color:#57536b">Submitted by</td><td style="padding:2px 0;font-weight:600">${esc(report.submitterName)} (${esc(report.position)})</td></tr>
       <tr><td style="padding:2px 0;color:#57536b">Date recorded</td><td style="padding:2px 0;font-weight:600">${new Date(report.submittedAt).toLocaleString()}</td></tr>
     </table>
+    ${signatoriesTableHtml(executives)}
     <hr style="border:none;border-top:1px solid #d9d4c4;margin-bottom:16px" />`;
 
   const fields = report.fieldsSnapshot || [];
@@ -1171,9 +1208,13 @@ function buildFilledReportHtml(report, ctx) {
     body = fields.map((f) => `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${answerBlock(f)}`).join("");
   }
 
+  const signatureBlocks = executives.length
+    ? executives.map((u) => signatureBlock(u, u.isAdmin ? "IT Admin" : u.position)).join("")
+    : signatureBlock(submitter, report.position);
+
   const footer = `
-    <div style="margin-top:26px;display:flex;justify-content:space-between;gap:16px">
-      ${signatureBlock(submitter, report.position)}
+    <div style="margin-top:26px;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:20px">
+      ${signatureBlocks}
     </div>
     <div style="margin-top:24px;font-size:10px;color:#8a8698;text-align:center">Reviewed &amp; downloaded via the parish register. Read-only record.</div>`;
 
