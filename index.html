@@ -351,6 +351,7 @@ function parseTemplateFields(rawText, type) {
   return fields;
 }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function fmtMoney(n) { const v = isNaN(n) ? 0 : n; return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function todayDisplay() { return new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }); }
 function monthYearDisplay() { return new Date().toLocaleDateString(undefined, { year: "numeric", month: "long" }); }
 
@@ -674,6 +675,35 @@ const App = {
   templateForSubmit(type) {
     const { level, id } = this.scopeFor(this.currentUser());
     return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+  },
+
+  // The financial secretary/treasurer's own chain of financial reports, oldest first,
+  // used to auto-carry the running balance from one report to the next.
+  myFinancialReports(user) {
+    const { level, id } = this.scopeFor(user);
+    return this.org.reports
+      .filter((r) => r.type === "financial" && r.ownerLevel === level && r.ownerId === id && r.submittedBy === user.id)
+      .sort((a, b) => (a.submittedAt || 0) - (b.submittedAt || 0));
+  },
+  // True once this financial secretary/treasurer has at least one report on record —
+  // after that their term opening balance is locked and only auto-updates from then on.
+  hasFinancialHistory(user) { return this.myFinancialReports(user).length > 0; },
+  // Computes the opening balance that should be carried into a report: the closing
+  // balance of the report immediately before it in this person's own chain, or their
+  // term opening balance if this is their first-ever report. Never user-editable —
+  // it only ever moves by the income/expenditure entered on each report.
+  getOpeningBalanceFor(user, editingReport) {
+    const template = this.templateForSubmit("financial");
+    const closingField = template ? template.fields.find((f) => /closing balance/i.test(f.label)) : null;
+    let chain = this.myFinancialReports(user);
+    if (editingReport) chain = chain.filter((r) => (r.submittedAt || 0) < (editingReport.submittedAt || 0));
+    const last = chain[chain.length - 1];
+    if (last && closingField && last.data && last.data[closingField.id] !== undefined && last.data[closingField.id] !== "") {
+      const v = parseFloat(last.data[closingField.id]);
+      if (!isNaN(v)) return v;
+    }
+    const opening = parseFloat(user.termOpeningBalance);
+    return isNaN(opening) ? 0 : opening;
   },
 
   openTemplateEditor(type) {
@@ -1393,9 +1423,25 @@ function submitReportFormHtml(type) {
   const eventName = editingReport ? editingReport.eventName : "";
   const user = App.currentUser();
   const isFinancial = type === "financial";
-  if (isFinancial && !editing) {
-    const openingField = template.fields.find((f) => /opening balance/i.test(f.label));
-    if (openingField && !submitFormValues[openingField.id] && user.termOpeningBalance) submitFormValues[openingField.id] = user.termOpeningBalance;
+
+  // Financial reports carry their balance automatically: opening balance comes from the
+  // end of the previous report (or the term's starting amount for the very first one),
+  // and closing balance is always opening + income − expenditure. Neither is user-editable.
+  let openingField = null, closingField = null, incomeFields = [], expenditureFields = [];
+  if (isFinancial) {
+    openingField = template.fields.find((f) => /opening balance/i.test(f.label)) || null;
+    closingField = template.fields.find((f) => /closing balance/i.test(f.label)) || null;
+    incomeFields = template.fields.filter((f) => f !== openingField && f !== closingField && /income/i.test(f.label));
+    expenditureFields = template.fields.filter((f) => f !== openingField && f !== closingField && /expenditure/i.test(f.label));
+    if (openingField) {
+      const computedOpening = App.getOpeningBalanceFor(user, editingReport);
+      submitFormValues[openingField.id] = String(computedOpening);
+      if (closingField) {
+        const incomeSum = incomeFields.reduce((s, f) => s + (parseFloat(submitFormValues[f.id]) || 0), 0);
+        const expenditureSum = expenditureFields.reduce((s, f) => s + (parseFloat(submitFormValues[f.id]) || 0), 0);
+        submitFormValues[closingField.id] = String(computedOpening + incomeSum - expenditureSum);
+      }
+    }
   }
   return `
   ${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}
@@ -1413,8 +1459,21 @@ function submitReportFormHtml(type) {
     </div>
     ${template.fields.map((f) => {
       let input;
+      if (openingField && f.id === openingField.id) {
+        const val = submitFormValues[f.id] || "0";
+        input = `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)" id="fin-opening-display">GHS ${fmtMoney(parseFloat(val) || 0)}</div><input type="hidden" id="fin-opening-hidden" name="${f.id}" value="${esc(val)}" />`;
+        return fieldWrap(f.label, input, "Carried over automatically from your last report's closing balance (or your term's opening amount for your first report) — this can't be edited directly.");
+      }
+      if (closingField && f.id === closingField.id) {
+        const val = submitFormValues[f.id] || "0";
+        input = `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)" id="fin-closing-display">GHS ${fmtMoney(parseFloat(val) || 0)}</div><input type="hidden" id="fin-closing-hidden" name="${f.id}" value="${esc(val)}" />`;
+        return fieldWrap(f.label, input, "Calculated automatically as opening balance + income − expenditure — this can't be edited directly.");
+      }
+      const isIncome = incomeFields.some((inf) => inf.id === f.id);
+      const isExpenditure = expenditureFields.some((exf) => exf.id === f.id);
+      const finAttrs = isIncome ? ` data-fin-role="income" oninput="recalcFinancial()"` : isExpenditure ? ` data-fin-role="expenditure" oninput="recalcFinancial()"` : "";
       if (f.type === "textarea") input = `<textarea class="cra-textarea" rows="3" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea>`;
-      else input = `<input class="cra-input" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}" value="${esc(submitFormValues[f.id] || "")}" />`;
+      else input = `<input class="cra-input" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}"${finAttrs} value="${esc(submitFormValues[f.id] || "")}" />`;
       return fieldWrap(f.label, input, f.help);
     }).join("")}
     ${submitCustomFields.length ? `<div class="cra-label" style="color:var(--violet);padding-top:0.25rem">Your own questions</div>` : ""}
@@ -1431,6 +1490,22 @@ function submitReportFormHtml(type) {
       ${done ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} ${editing ? "Saved" : "Submitted — the president can now review it"}</span>` : ""}
     </div>
   </form>`;
+}
+
+// Recomputes the (locked) closing balance whenever an income or expenditure field
+// changes, so the running balance always reflects opening + income − expenditure live.
+function recalcFinancial() {
+  const openingEl = document.getElementById("fin-opening-hidden");
+  const closingHidden = document.getElementById("fin-closing-hidden");
+  if (!openingEl || !closingHidden) return;
+  const opening = parseFloat(openingEl.value) || 0;
+  let income = 0, expenditure = 0;
+  document.querySelectorAll('[data-fin-role="income"]').forEach((el) => { income += parseFloat(el.value) || 0; });
+  document.querySelectorAll('[data-fin-role="expenditure"]').forEach((el) => { expenditure += parseFloat(el.value) || 0; });
+  const closing = opening + income - expenditure;
+  closingHidden.value = closing.toFixed(2);
+  const closingDisplay = document.getElementById("fin-closing-display");
+  if (closingDisplay) closingDisplay.textContent = "GHS " + fmtMoney(closing);
 }
 
 function addCustomSubmitField() {
@@ -1653,11 +1728,15 @@ function profileViewHtml() {
       ${user.signatureDataUrl ? `<img class="sig-thumb mb-2" src="${user.signatureDataUrl}" />` : `<p class="text-xs mb-2" style="color:var(--ink-soft)">No signature uploaded yet.</p>`}
       <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("pen", 13)} ${user.signatureDataUrl ? "Replace signature" : "Upload signature"}<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadSignature(this.files[0])" /></label>
     </div>
-    ${isFinancial ? `<form onsubmit="return handleTermBalanceSubmit(event)" class="space-y-2">
+    ${isFinancial ? (App.hasFinancialHistory(user) ? `<div class="space-y-2">
+      <div class="cra-label mb-1">Opening balance at start of term (GHS)</div>
+      <div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">GHS ${fmtMoney(parseFloat(user.termOpeningBalance) || 0)}</div>
+      <p class="text-xs" style="color:var(--ink-soft)">Locked now that you've submitted a financial report — your balance updates automatically from your reports' income and expenditure from here on.</p>
+    </div>` : `<form onsubmit="return handleTermBalanceSubmit(event)" class="space-y-2">
       ${fieldWrap("Opening balance at start of term (GHS)", `<input id="term-balance" class="cra-input" type="number" value="${esc(user.termOpeningBalance || "")}" placeholder="Amount you started your term with" />`)}
-      <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report.</p>
+      <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report. Once you submit that report, this amount locks and your balance updates automatically after that.</p>
       ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
-    </form>` : ""}
+    </form>`) : ""}
   </div>`;
 }
 function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
