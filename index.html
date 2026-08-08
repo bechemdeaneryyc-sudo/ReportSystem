@@ -519,6 +519,8 @@ const App = {
   submitType: null,
   editingReportId: null,
   pdfBuilding: false,
+  bulkPdfBuilding: false,
+  selectedReportIds: new Set(),
   showAddMember: false,
   addMemberDraft: { level: "local", localId: "", position: "", name: "", email: "", password: "" },
   parishSettingsDraft: null,
@@ -789,6 +791,15 @@ const App = {
 
   viewReport(id) { this.viewingReportId = id; this.render(); },
   closeReportView() { this.viewingReportId = null; this.render(); },
+  toggleReportSelect(id) {
+    if (this.selectedReportIds.has(id)) this.selectedReportIds.delete(id); else this.selectedReportIds.add(id);
+    this.render();
+  },
+  toggleSelectAllReports(ids, checked) {
+    ids.forEach((id) => { if (checked) this.selectedReportIds.add(id); else this.selectedReportIds.delete(id); });
+    this.render();
+  },
+  clearReportSelection() { this.selectedReportIds.clear(); this.render(); },
   editReport(id) {
     const r = this.org.reports.find((x) => x.id === id);
     if (!r) return;
@@ -1259,25 +1270,31 @@ function signatoriesTableHtml(execs) {
 }
 
 function buildFilledReportHtml(report, ctx) {
+  const isBlank = !!report.isBlankTemplate;
   const submitter = App.org.users.find((u) => u.id === report.submittedBy);
-  const executives = executivesForReport(report);
+  const executives = isBlank ? [] : executivesForReport(report);
   const header = `
     ${ctx.parish && ctx.parish.logoDataUrl ? `<div style="text-align:center;margin-bottom:8px"><img src="${ctx.parish.logoDataUrl}" style="height:56px" /></div>` : ""}
     <div style="font-family:'Fraunces',Georgia,serif;text-align:center;margin-bottom:18px">
       <div style="font-size:19px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${esc(ctx.parishName)}</div>
       ${ctx.localName ? `<div style="font-size:14px;color:#57536b">${esc(ctx.localName)}</div>` : ""}
-      <div style="font-size:12px;color:#57536b;margin-top:8px">${esc(reportTypeLabel(report.type))} &middot; Reg. No ${esc(report.regNo)}</div>
+      <div style="font-size:12px;color:#57536b;margin-top:8px">${esc(reportTypeLabel(report.type))} &middot; ${isBlank ? "Blank template" : `Reg. No ${esc(report.regNo)}`}</div>
+      ${isBlank ? `<div style="display:inline-block;margin-top:8px;padding:2px 10px;border:1px solid #a3382e;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:0.05em;color:#a3382e;text-transform:uppercase">Not yet submitted</div>` : ""}
     </div>
     <table style="width:100%;font-size:12px;margin-bottom:16px;border-collapse:collapse">
-      <tr><td style="padding:2px 0;color:#57536b">Reporting period</td><td style="padding:2px 0;font-weight:600">${esc(report.period || "—")}</td></tr>
-      <tr><td style="padding:2px 0;color:#57536b">Submitted by</td><td style="padding:2px 0;font-weight:600">${esc(report.submitterName)} (${esc(report.position)})</td></tr>
-      <tr><td style="padding:2px 0;color:#57536b">Date recorded</td><td style="padding:2px 0;font-weight:600">${new Date(report.submittedAt).toLocaleString()}</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Reporting period</td><td style="padding:2px 0;font-weight:600">${isBlank ? "—" : esc(report.period || "—")}</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Submitted by</td><td style="padding:2px 0;font-weight:600">${isBlank ? "—" : `${esc(report.submitterName)} (${esc(report.position)})`}</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Date recorded</td><td style="padding:2px 0;font-weight:600">${isBlank ? "—" : new Date(report.submittedAt).toLocaleString()}</td></tr>
     </table>
-    ${signatoriesTableHtml(executives)}
+    ${isBlank ? "" : signatoriesTableHtml(executives)}
     <hr style="border:none;border-top:1px solid #d9d4c4;margin-bottom:16px" />`;
 
   const fields = report.fieldsSnapshot || [];
-  const answerBlock = (f) => `<div style="margin:4px 0 14px 0;padding:8px 10px;background:#f5f3ea;border-left:3px solid #a3812f;font-size:12.5px;white-space:pre-wrap">${esc(String(report.data[f.id] ?? "").trim() || "—")}</div>`;
+  const answerBlock = (f) => {
+    const val = String(report.data[f.id] ?? "").trim();
+    if (val) return `<div style="margin:4px 0 14px 0;padding:8px 10px;background:#f5f3ea;border-left:3px solid #a3812f;font-size:12.5px;white-space:pre-wrap">${esc(val)}</div>`;
+    return `<div style="margin:4px 0 14px 0;padding:8px 10px;border:1px dashed #c9c2ac;border-radius:4px;font-size:11px;color:#a39ab0;min-height:24px">&nbsp;</div>`;
+  };
 
   let body;
   if (report.docHtmlSnapshot) {
@@ -1301,17 +1318,21 @@ function buildFilledReportHtml(report, ctx) {
     body = fields.map((f) => `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${answerBlock(f)}`).join("");
   }
 
-  const signatureBlocks = executives.length
-    ? executives.map((u) => signatureBlock(u, u.isAdmin ? "IT Admin" : u.position)).join("")
-    : signatureBlock(submitter, report.position);
+  const signatureBlocks = isBlank
+    ? `${signatureBlock({ name: "____________________", signatureDataUrl: null }, reportTypeLabel(report.type).includes("Financial") ? "Financial Secretary / Treasurer" : "Secretary")}`
+    : (executives.length ? executives.map((u) => signatureBlock(u, u.isAdmin ? "IT Admin" : u.position)).join("") : signatureBlock(submitter, report.position));
 
   const footer = `
     <div style="margin-top:26px;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:20px">
       ${signatureBlocks}
     </div>
-    <div style="margin-top:24px;font-size:10px;color:#8a8698;text-align:center">Reviewed &amp; downloaded via the parish register. Read-only record.</div>`;
+    <div style="margin-top:24px;font-size:10px;color:#8a8698;text-align:center">${isBlank ? "Blank template — print and fill by hand, or fill in the app and submit for the real record." : "Reviewed &amp; downloaded via the parish register. Read-only record."}</div>`;
 
-  return `<div style="font-family:'Inter',ui-sans-serif,sans-serif;color:#211f2e;background:#ffffff;padding:28px;max-width:720px">${header}${body}${footer}</div>`;
+  const watermarkText = esc((ctx.parishName || "PARISH REGISTER").toUpperCase());
+  const watermarkSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><text x='160' y='170' transform='rotate(-32 160,160)' font-family='Georgia, serif' font-size='24' fill='%23211f2e' fill-opacity='0.055' text-anchor='middle'>${watermarkText}</text></svg>`;
+  const watermarkUrl = `data:image/svg+xml,${watermarkSvg.replace(/#/g, "%23").replace(/'/g, "%27")}`;
+
+  return `<div style="position:relative;font-family:'Inter',ui-sans-serif,sans-serif;color:#211f2e;background-color:#ffffff;background-image:url(&quot;${watermarkUrl}&quot;);background-repeat:repeat;background-size:320px 320px;padding:28px;max-width:720px">${header}${body}${footer}</div>`;
 }
 
 async function downloadReportPdf(reportId) {
@@ -1326,6 +1347,62 @@ async function downloadReportPdf(reportId) {
     await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser. Try the .txt download instead."); }
   finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
+}
+
+// A synthetic "report" built straight from a template, with no answers filled in —
+// used to produce a printable blank form (question structure + empty fields) for
+// cases where the secretary/treasurer hasn't submitted a digital report yet.
+function buildBlankReportObject(type) {
+  const user = App.currentUser();
+  const { level, id } = App.scopeFor(user);
+  const template = App.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type);
+  if (!template) return null;
+  return {
+    id: "blank", type, ownerLevel: level, ownerId: id,
+    submittedBy: null, submitterName: "—", position: reportTypeLabel(type),
+    period: null, frequency: null, eventName: null,
+    data: {}, fieldsSnapshot: template.fields,
+    docHtmlSnapshot: template.docHtml, docFileNameSnapshot: template.docFileName,
+    submittedAt: Date.now(), regNo: "BLANK", isBlankTemplate: true,
+  };
+}
+
+async function downloadBlankTemplatePdf(type) {
+  const report = buildBlankReportObject(type);
+  if (!report) { alert("No template has been set up for this report type yet."); return; }
+  const ctx = ctxForReport(report);
+  App.pdfBuilding = "blank:" + type; App.render();
+  const container = document.createElement("div");
+  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
+  container.innerHTML = buildFilledReportHtml(report, ctx);
+  document.body.appendChild(container);
+  try {
+    await html2pdf().set({ margin: 10, filename: `blank-${type}-template.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
+  } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser."); }
+  finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
+}
+
+// Combines every selected report into a single multi-page PDF so the president can
+// review or archive a batch at once instead of downloading them one at a time.
+async function downloadSelectedReportsPdf() {
+  const ids = Array.from(App.selectedReportIds);
+  if (!ids.length) return;
+  const reports = ids.map((id) => App.org.reports.find((r) => r.id === id)).filter(Boolean);
+  if (!reports.length) return;
+  App.bulkPdfBuilding = true; App.render();
+  const container = document.createElement("div");
+  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
+  container.innerHTML = reports.map((r, i) => `<div style="${i > 0 ? "page-break-before:always;" : ""}">${buildFilledReportHtml(r, ctxForReport(r))}</div>`).join("");
+  document.body.appendChild(container);
+  try {
+    await html2pdf().set({
+      margin: 10, filename: `reports-bulk-${reports.length}.pdf`,
+      html2canvas: { scale: 2, backgroundColor: "#ffffff" },
+      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      pagebreak: { mode: ["css", "legacy"] },
+    }).from(container).save();
+  } catch (err) { console.error(err); alert("Couldn't build the combined PDF in this browser."); }
+  finally { document.body.removeChild(container); App.bulkPdfBuilding = false; App.render(); }
 }
 
 function reportViewModalHtml(report) {
@@ -1399,6 +1476,7 @@ function templateEditorHtml(type) {
     </div>
     <div class="row items-center gap-3 mt-4">
       ${btnHtml({ variant: "primary", label: "Save template", iconName: "upload", attrs: `onclick="App.saveTemplate('${type}')"` })}
+      ${fields.length > 0 ? btnHtml({ variant: "ghost", label: App.pdfBuilding === "blank:" + type ? "Building PDF…" : "Download blank form (PDF)", iconName: "download", attrs: `onclick="downloadBlankTemplatePdf('${type}')" ${App.pdfBuilding === "blank:" + type ? "disabled" : ""}` }) : ""}
       ${saved ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
     </div>
   </div>`;
@@ -1428,13 +1506,14 @@ function submitReportFormHtml(type) {
   // end of the previous report (or the term's starting amount for the very first one),
   // and closing balance is always opening + income − expenditure. Neither is user-editable.
   let openingField = null, closingField = null, incomeFields = [], expenditureFields = [];
+  let computedOpening = 0;
   if (isFinancial) {
     openingField = template.fields.find((f) => /opening balance/i.test(f.label)) || null;
     closingField = template.fields.find((f) => /closing balance/i.test(f.label)) || null;
     incomeFields = template.fields.filter((f) => f !== openingField && f !== closingField && /income/i.test(f.label));
     expenditureFields = template.fields.filter((f) => f !== openingField && f !== closingField && /expenditure/i.test(f.label));
     if (openingField) {
-      const computedOpening = App.getOpeningBalanceFor(user, editingReport);
+      computedOpening = App.getOpeningBalanceFor(user, editingReport);
       submitFormValues[openingField.id] = String(computedOpening);
       if (closingField) {
         const incomeSum = incomeFields.reduce((s, f) => s + (parseFloat(submitFormValues[f.id]) || 0), 0);
@@ -1445,6 +1524,10 @@ function submitReportFormHtml(type) {
   }
   return `
   ${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}
+  ${isFinancial && openingField ? `<div class="row items-center gap-3 p-4 mb-4 cra-card" style="background:linear-gradient(135deg, rgba(44,36,81,0.06), rgba(163,129,47,0.08));border-color:var(--gold)">
+    <div class="cra-seal" style="width:42px;height:42px">${icon("scroll", 18)}</div>
+    <div><div class="cra-label mb-1">Balance carried into this report</div><div class="cra-display" style="font-size:1.35rem;font-weight:600">GHS ${fmtMoney(computedOpening)}</div><p class="text-xs mt-1" style="color:var(--ink-soft)">Fills in automatically below as your opening balance — enter income and expenditure and the closing balance updates itself.</p></div>
+  </div>` : ""}
   <form class="cra-card cra-card-accent p-5 space-y-4" onsubmit="return handleSubmitReport(event,'${type}')">
     <div class="grid sm-grid-2">
       ${fieldWrap("How often is this report?", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
@@ -1538,12 +1621,22 @@ function handleSubmitReport(e, type) {
 function reportsTableHtml(reports, showLocal, allowEdit) {
   if (reports.length === 0) return emptyState("file", "No reports submitted yet", "Once your executives submit reports, they'll be listed here for review and download.");
   const user = App.currentUser();
-  return `<div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
+  const ids = reports.map((r) => r.id);
+  const selectedHere = ids.filter((id) => App.selectedReportIds.has(id));
+  const allSelected = ids.length > 0 && selectedHere.length === ids.length;
+  const bulkBar = App.selectedReportIds.size > 0 ? `<div class="row items-center gap-3 mb-3 p-3 wrap" style="background:#f5f3ea;border-radius:8px">
+      <span class="text-sm font-medium">${App.selectedReportIds.size} report${App.selectedReportIds.size !== 1 ? "s" : ""} selected</span>
+      ${btnHtml({ variant: "primary", label: App.bulkPdfBuilding ? "Building PDF…" : "Download selected (PDF)", iconName: "download", attrs: `onclick="downloadSelectedReportsPdf()" ${App.bulkPdfBuilding ? "disabled" : ""}` })}
+      ${btnHtml({ variant: "ghost", label: "Clear selection", attrs: `onclick="App.clearReportSelection()"` })}
+    </div>` : "";
+  return `${bulkBar}<div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
     <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)">
+      <th class="px-4 py-2"><input type="checkbox" ${allSelected ? "checked" : ""} onchange='App.toggleSelectAllReports(${JSON.stringify(ids)}, this.checked)' /></th>
       <th class="px-4 py-2 cra-label">Reg. No</th><th class="px-4 py-2 cra-label">Type</th>${showLocal ? `<th class="px-4 py-2 cra-label">Local</th>` : ""}
       <th class="px-4 py-2 cra-label">Submitted by</th><th class="px-4 py-2 cra-label">Period</th><th class="px-4 py-2 cra-label">Date</th><th class="px-4 py-2 cra-label text-right">Action</th>
     </tr></thead>
     <tbody>${reports.slice().reverse().map((r) => `<tr class="cra-ledger-row">
+      <td class="px-4 py-3"><input type="checkbox" ${App.selectedReportIds.has(r.id) ? "checked" : ""} onchange="App.toggleReportSelect('${r.id}')" /></td>
       <td class="px-4 py-3 cra-mono text-xs">${esc(r.regNo)}</td>
       <td class="px-4 py-3">${badge(REPORT_TYPE_TONE[r.type], reportTypeLabel(r.type))}</td>
       ${showLocal ? `<td class="px-4 py-3">${esc(r.localName || "—")}</td>` : ""}
