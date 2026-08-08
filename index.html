@@ -1,0 +1,1675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Parish Register</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+.cra-root {
+  --ink: #211f2e;
+  --ink-soft: #57536b;
+  --bg: #eae7dd;
+  --paper: #fbfaf5;
+  --line: #d9d4c4;
+  --wine: #732a30;
+  --wine-dark: #591f24;
+  --violet: #2c2451;
+  --violet-soft: #453a72;
+  --gold: #a3812f;
+  --green: #3f6650;
+  --danger: #a3382e;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  min-height: 100vh;
+}
+.cra-display { font-family: 'Fraunces', Georgia, serif; }
+.cra-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+.cra-bg { background: var(--bg); }
+.cra-paper { background: var(--paper); }
+
+.cra-card { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; position: relative; }
+.cra-card-accent::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, var(--wine), var(--gold)); border-radius: 10px 10px 0 0; }
+
+.cra-btn { font-family: 'Inter', sans-serif; font-weight: 600; border-radius: 7px; transition: transform .12s ease, box-shadow .12s ease, background .15s ease; cursor: pointer; border: 1px solid transparent; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; font-size: 0.9rem; padding: 0.55rem 1rem; }
+.cra-btn:active { transform: translateY(1px); }
+.cra-btn-primary { background: var(--wine); color: #fbf6ee; }
+.cra-btn-primary:hover { background: var(--wine-dark); }
+.cra-btn-secondary { background: var(--violet); color: #fbf6ee; }
+.cra-btn-secondary:hover { background: var(--violet-soft); }
+.cra-btn-ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.cra-btn-ghost:hover { background: #f1efe4; }
+.cra-btn-danger { background: transparent; color: var(--danger); border-color: #e2c9c4; }
+.cra-btn-danger:hover { background: #f8ecea; }
+.cra-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.cra-btn-sm { padding: 0.35rem 0.65rem; font-size: 0.78rem; }
+.cra-btn-icon { padding: 0.4rem; }
+
+.cra-input, .cra-select, .cra-textarea { width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: 7px; padding: 0.55rem 0.7rem; font-family: 'Inter', sans-serif; font-size: 0.9rem; color: var(--ink); outline: none; }
+.cra-input:focus, .cra-select:focus, .cra-textarea:focus { border-color: var(--wine); box-shadow: 0 0 0 3px rgba(115,42,48,0.12); }
+.cra-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-soft); display: block; margin-bottom: 0.3rem; }
+
+.cra-seal { width: 44px; height: 44px; border-radius: 999px; border: 2px solid var(--gold); display: flex; align-items: center; justify-content: center; color: var(--wine); font-family: 'Fraunces', serif; font-weight: 600; flex-shrink: 0; background: radial-gradient(circle at 35% 30%, #fff6e2, var(--paper)); position: relative; overflow: hidden; }
+.cra-seal::after { content: ""; position: absolute; inset: 3px; border-radius: 999px; border: 1px dashed rgba(163,129,47,0.55); }
+.cra-seal img { width: 100%; height: 100%; object-fit: cover; border-radius: 999px; position: relative; z-index: 1; }
+
+.cra-badge { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 0.2rem 0.55rem; border-radius: 999px; white-space: nowrap; }
+.cra-badge-violet { background: rgba(44,36,81,0.09); color: var(--violet); }
+.cra-badge-wine { background: rgba(115,42,48,0.1); color: var(--wine); }
+.cra-badge-gold { background: rgba(163,129,47,0.14); color: #7a611f; }
+.cra-badge-green { background: rgba(63,102,80,0.12); color: var(--green); }
+
+.cra-nav-item { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.75rem; border-radius: 7px; font-size: 0.87rem; font-weight: 500; color: #ece8f5; cursor: pointer; opacity: 0.78; background: transparent; border: none; width: 100%; text-align: left; }
+.cra-nav-item:hover { opacity: 1; background: rgba(255,255,255,0.06); }
+.cra-nav-item.active { opacity: 1; background: rgba(255,255,255,0.13); }
+
+.cra-sidebar { background: var(--violet); background-image: linear-gradient(165deg, #2c2451, #241d43); }
+.cra-ledger-row { border-bottom: 1px solid var(--line); }
+.cra-ledger-row:last-child { border-bottom: none; }
+.cra-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.cra-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+
+@keyframes cra-fade-in { from { opacity: 0; transform: translateY(6px);} to {opacity:1; transform:translateY(0);} }
+.cra-fade-in { animation: cra-fade-in .35s ease; }
+@keyframes cra-spin { to { transform: rotate(360deg); } }
+.cra-spin { animation: cra-spin 1s linear infinite; }
+
+.row { display: flex; }
+.col { display: flex; flex-direction: column; }
+.items-center { align-items: center; }
+.items-start { align-items: flex-start; }
+.justify-between { justify-content: space-between; }
+.justify-end { justify-content: flex-end; }
+.flex-1 { flex: 1; min-width: 0; }
+.gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 0.75rem; } .gap-4 { gap: 1rem; } .gap-5 { gap: 1.25rem; }
+.wrap { flex-wrap: wrap; }
+.grid { display: grid; gap: 1rem; }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-4 { grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 640px) { .sm-grid-2 { grid-template-columns: repeat(2, 1fr); } .sm-grid-4 { grid-template-columns: repeat(4, 1fr); } .sm-block { display: block; } .sm-row { flex-direction: row; } }
+@media (min-width: 768px) { .md-static { position: static !important; transform: none !important; } .md-hidden { display: none !important; } .md-flex { display: flex !important; } }
+.hidden { display: none !important; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.w-full { width: 100%; }
+.max-w-md { max-width: 28rem; } .max-w-lg { max-width: 32rem; } .max-w-xl { max-width: 36rem; } .max-w-2xl { max-width: 42rem; }
+.max-w-5xl { max-width: 64rem; } .max-w-6xl { max-width: 72rem; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+.p-2 { padding: 0.5rem; } .p-3 { padding: 0.75rem; } .p-4 { padding: 1rem; } .p-5 { padding: 1.25rem; } .p-6 { padding: 1.5rem; } .p-7 { padding: 1.75rem; }
+.px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.px-5 { padding-left: 1.25rem; padding-right: 1.25rem; }
+.px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+.py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+.py-5 { padding-top: 1.25rem; padding-bottom: 1.25rem; }
+.py-6 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+.py-10 { padding-top: 2.5rem; padding-bottom: 2.5rem; }
+.py-14 { padding-top: 3.5rem; padding-bottom: 3.5rem; }
+.mb-1 { margin-bottom: 0.25rem; } .mb-2 { margin-bottom: 0.5rem; } .mb-3 { margin-bottom: 0.75rem; }
+.mb-4 { margin-bottom: 1rem; } .mb-5 { margin-bottom: 1.25rem; } .mb-6 { margin-bottom: 1.5rem; } .mb-8 { margin-bottom: 2rem; }
+.mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } .mt-3 { margin-top: 0.75rem; } .mt-4 { margin-top: 1rem; }
+.mt-5 { margin-top: 1.25rem; } .mt-6 { margin-top: 1.5rem; } .mt-8 { margin-top: 2rem; } .mt-12 { margin-top: 3rem; }
+.text-xs { font-size: 0.75rem; } .text-sm { font-size: 0.875rem; } .text-base { font-size: 1rem; }
+.text-lg { font-size: 1.125rem; } .text-xl { font-size: 1.25rem; } .text-2xl { font-size: 1.5rem; } .text-3xl { font-size: 1.875rem; } .text-4xl { font-size: 2.25rem; }
+.font-semibold { font-weight: 600; } .font-medium { font-weight: 500; }
+.leading-tight { line-height: 1.2; } .leading-none { line-height: 1; }
+.rounded { border-radius: 7px; } .rounded-lg { border-radius: 10px; } .rounded-xl { border-radius: 14px; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-y-2 > * + * { margin-top: 0.5rem; }
+.space-y-3 > * + * { margin-top: 0.75rem; }
+.space-y-4 > * + * { margin-top: 1rem; }
+.space-y-5 > * + * { margin-top: 1.25rem; }
+.divide-line > * + * { border-top: 1px solid var(--line); }
+.relative { position: relative; }
+.overflow-x-auto { overflow-x: auto; }
+.overflow-y-auto { overflow-y: auto; }
+.whitespace-pre-wrap { white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; }
+a, button, input, select, textarea { font: inherit; }
+button { border: none; background: none; }
+.icon { display: inline-flex; flex-shrink: 0; }
+.link-btn { background: none; border: none; cursor: pointer; padding: 0; font-weight: 600; color: var(--wine); }
+
+#app-shell { display: flex; min-height: 100vh; }
+#sidebar { width: 16rem; flex-shrink: 0; display: flex; flex-direction: column; position: fixed; top: 0; bottom: 0; left: 0; z-index: 40; transform: translateX(-100%); transition: transform .2s ease; }
+#sidebar.open { transform: translateX(0); }
+#sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 30; }
+#main-area { flex: 1; min-width: 0; }
+@media (min-width: 768px) { #sidebar { position: static; transform: none; } #sidebar-overlay { display: none !important; } }
+
+.modal-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(33,31,46,0.55); }
+.modal-box { border: 1px solid var(--line); border-radius: 14px; width: 100%; max-height: 88vh; overflow-y: auto; }
+.stepdot { height: 6px; border-radius: 999px; transition: all .2s; }
+.sig-thumb { max-height: 46px; max-width: 140px; border-bottom: 1px solid var(--ink); }
+::selection { background: rgba(115,42,48,0.2); }
+</style>
+</head>
+<body>
+<div id="app" class="cra-root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-firestore-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-auth-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.11.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script>
+
+/* ==================================================================== */
+/*  Firebase / storage configuration                                     */
+/*                                                                        */
+/*  Live Firestore config — data is shared across every device/browser.  */
+/* ==================================================================== */
+
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAPcdjJ_Z_XSxIrV96-stYTjuHIg5dKE2I",
+  authDomain: "report-fb4ff.firebaseapp.com",
+  projectId: "report-fb4ff",
+  storageBucket: "report-fb4ff.firebasestorage.app",
+  messagingSenderId: "210596444819",
+  appId: "1:210596444819:web:a5d54c3a6f2f7030e2eb66",
+};
+const FIRESTORE_ORG_DOC = "parishRegister/main";
+
+let firestoreDb = null;
+let firebaseAuth = null;
+let secondaryAuth = null; // used to create other users' accounts without hijacking the admin's own session
+function firebaseConfigured() { return FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.startsWith("PASTE_"); }
+if (firebaseConfigured() && window.firebase) {
+  try {
+    firebase.initializeApp(FIREBASE_CONFIG);
+    firestoreDb = firebase.firestore();
+    firebaseAuth = firebase.auth();
+  } catch (e) { console.error("Firebase init failed", e); }
+  try {
+    const secondaryApp = firebase.initializeApp(FIREBASE_CONFIG, "Secondary");
+    secondaryAuth = secondaryApp.auth();
+  } catch (e) { console.error("Secondary Firebase app init failed", e); }
+}
+function authErrorMessage(e) {
+  const code = e && e.code;
+  if (code === "auth/user-not-found" || code === "auth/wrong-password" || code === "auth/invalid-credential" || code === "auth/invalid-login-credentials") return "That email and password don't match a registered account.";
+  if (code === "auth/email-already-in-use") return "That email is already registered.";
+  if (code === "auth/weak-password") return "Password should be at least 6 characters.";
+  if (code === "auth/invalid-email") return "That doesn't look like a valid email address.";
+  if (code === "auth/too-many-requests") return "Too many attempts — please wait a moment and try again.";
+  if (code === "auth/network-request-failed") return "Network error — check your connection and try again.";
+  return (e && e.message) || "Something went wrong. Please try again.";
+}
+
+/* Firestore rules require a signed-in user (see rules below). A brand-new    */
+/* visitor isn't signed in yet, so before the very first read we sign them   */
+/* in anonymously — just enough to satisfy `request.auth != null`. Writes    */
+/* still require a *real* (non-anonymous) account, enforced in the rules.    */
+function waitForAuthReady() {
+  if (!firebaseAuth) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const unsub = firebaseAuth.onAuthStateChanged((user) => { unsub(); resolve(user); });
+  });
+}
+async function ensureAuthForRead() {
+  if (!firebaseAuth) return;
+  const user = await waitForAuthReady();
+  if (!user) {
+    try { await firebaseAuth.signInAnonymously(); } catch (e) { console.error("Anonymous sign-in failed", e); }
+  }
+}
+
+/* ==================================================================== */
+/*  Constants                                                             */
+/* ==================================================================== */
+
+const POSITIONS = ["President", "Vice President", "Secretary", "Financial Secretary", "Treasurer", "Public Relations Officer", "Welfare Officer"];
+const FIELD_TYPES = [
+  { value: "text", label: "Short answer" },
+  { value: "textarea", label: "Paragraph" },
+  { value: "number", label: "Number" },
+  { value: "date", label: "Date" },
+];
+const REPORT_TYPE_LABELS = { program: "Programmes & Activities Report", financial: "Financial Report", survey: "Youth Survey Report" };
+const REPORT_TYPE_TONE = { program: "violet", financial: "green", survey: "gold" };
+const REPORT_TYPE_ICON = { program: "clipboard", financial: "wallet", survey: "scroll" };
+
+function reportTypesForPosition(pos) {
+  if (pos === "Secretary") return ["program", "survey"];
+  if (pos === "Financial Secretary" || pos === "Treasurer") return ["financial"];
+  return [];
+}
+function reportTypeLabel(type) { return REPORT_TYPE_LABELS[type] || type; }
+const uid = () => Math.random().toString(36).slice(2, 10);
+function guessFieldType(line) {
+  const l = line.toLowerCase();
+  if (/\bdate\b/.test(l)) return "date";
+  if (/(ghs|gh¢|amount|balance|number of|no\. of|how many|total|cost|price|\bqty\b|quantity|respondents)/.test(l)) return "number";
+  if (/(describe|explain|list|activities|challenges|remarks|recommendation|comments|narrat|summary|details of|findings|voices|way forward|impact|outcome)/.test(l) || line.length > 45) return "textarea";
+  return "text";
+}
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function todayDisplay() { return new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }); }
+function monthYearDisplay() { return new Date().toLocaleDateString(undefined, { year: "numeric", month: "long" }); }
+
+/* ==================================================================== */
+/*  Icons                                                                 */
+/* ==================================================================== */
+
+const ICON_PATHS = {
+  church: '<path d="M12 2 6 7v3H4v10h16V10h-2V7Z"/><path d="M9 21v-6h6v6"/><path d="M12 2v3"/>',
+  users: '<circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3-6 7-6s7 2.7 7 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.2c2.6.5 4.5 2.6 5 5.8"/>',
+  file: '<path d="M6 2h9l5 5v15H6Z"/><path d="M15 2v5h5"/>',
+  upload: '<path d="M12 15V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+  download: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/>',
+  logout: '<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4"/><path d="M15 16l4-4-4-4"/><path d="M19 12H9"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  chevronRight: '<path d="M9 6l6 6-6 6"/>',
+  building: '<rect x="4" y="3" width="16" height="18"/><path d="M8 7h1M8 11h1M8 15h1M15 7h1M15 11h1M15 15h1"/><path d="M10 21v-4h4v4"/>',
+  userPlus: '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-7 7-7s7 3 7 7"/><path d="M19 8v6M22 11h-6"/>',
+  shield: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6Z"/>',
+  landmark: '<path d="M3 21h18"/><path d="M4 21V10M9 21V10M15 21V10M20 21V10"/><path d="M2 10l10-6 10 6"/>',
+  clipboard: '<rect x="5" y="4" width="14" height="17" rx="1.5"/><path d="M9 3h6a1 1 0 0 1 1 1v1H8V4a1 1 0 0 1 1-1Z"/><path d="M9 11h6M9 15h6"/>',
+  wallet: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  check: '<path d="M5 12l5 5 9-11"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.1"/>',
+  menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+  arrowLeft: '<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>',
+  arrowRight: '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
+  trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>',
+  grip: '<circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/>',
+  scroll: '<path d="M6 4h11a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1H8a2 2 0 0 1-2-2V4Z"/><path d="M6 4a2 2 0 0 0-2 2v1h2"/><path d="M9 9h7M9 13h7"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  lock: '<rect x="4" y="10" width="16" height="10" rx="1.5"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',
+  pin: '<path d="M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12Z"/><circle cx="12" cy="10" r="2.5"/>',
+  home: '<path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/>',
+  loader: '<circle cx="12" cy="12" r="9" stroke-dasharray="42" stroke-dashoffset="14"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
+  pen: '<path d="M3 21l3-1 11-11-2-2L4 18Z"/><path d="M14 6l4 4"/>',
+};
+function icon(name, size = 16, extra = "") {
+  const p = ICON_PATHS[name] || "";
+  return `<svg class="icon ${extra}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+}
+
+/* ==================================================================== */
+/*  Default templates, seeded from the parish's own report formats       */
+/* ==================================================================== */
+
+function defaultProgramFields() {
+  return [
+    { id: uid(), label: "Membership (councils, groups involved)", type: "textarea" },
+    { id: uid(), label: "Name/title of programmes & activities", type: "textarea" },
+    { id: uid(), label: "Focus or theme for each programme", type: "textarea" },
+    { id: uid(), label: "Number of participants", type: "text" },
+    { id: uid(), label: "Resource persons", type: "textarea" },
+    { id: uid(), label: "Level of programme (Parish / Deanery / Diocesan)", type: "text" },
+    { id: uid(), label: "Outcome / impact", type: "textarea" },
+    { id: uid(), label: "Meetings held (dates, venue, key outcomes)", type: "textarea" },
+    { id: uid(), label: "Challenges faced", type: "textarea" },
+    { id: uid(), label: "Way forward / future plans", type: "textarea" },
+    { id: uid(), label: "Other matters (e.g. obituaries, special notices)", type: "textarea" },
+  ];
+}
+function defaultFinancialFields() {
+  return [
+    { id: uid(), label: "Opening balance (GHS)", type: "number" },
+    { id: uid(), label: "Total income (GHS)", type: "number" },
+    { id: uid(), label: "Total expenditure (GHS)", type: "number" },
+    { id: uid(), label: "Closing balance (GHS)", type: "number" },
+    { id: uid(), label: "Remarks / notes on accounts", type: "textarea" },
+  ];
+}
+function defaultSurveyFields() {
+  return [
+    { id: uid(), label: "Survey period / when conducted", type: "text" },
+    { id: uid(), label: "Total respondents", type: "number" },
+    { id: uid(), label: "Summary of findings", type: "textarea" },
+    { id: uid(), label: "Respondent demographics (sex, age, education, occupation)", type: "textarea" },
+    { id: uid(), label: "Parish connection & attendance patterns", type: "textarea" },
+    { id: uid(), label: "Perceived leadership support", type: "textarea" },
+    { id: uid(), label: "Key challenges identified", type: "textarea" },
+    { id: uid(), label: "What would encourage greater participation", type: "textarea" },
+    { id: uid(), label: "Notable voices / quotes from respondents", type: "textarea" },
+    { id: uid(), label: "Key findings", type: "textarea" },
+    { id: uid(), label: "Recommendations", type: "textarea" },
+  ];
+}
+
+/* ==================================================================== */
+/*  Storage (Firestore, with local fallback)                             */
+/* ==================================================================== */
+
+function emptyOrg() { return { users: [], parishes: [], locals: [], templates: [], reports: [] }; }
+
+async function loadOrg() {
+  if (firestoreDb) {
+    try {
+      await ensureAuthForRead();
+      const snap = await firestoreDb.doc(FIRESTORE_ORG_DOC).get();
+      if (snap.exists && snap.data() && snap.data().json) return JSON.parse(snap.data().json);
+      // No doc yet — don't write it while only anonymously signed in (security rules
+      // block that). It gets created for real on the first actual registration below.
+      return emptyOrg();
+    } catch (e) { console.error("Firestore load failed, falling back", e); }
+  }
+  if (window.storage) {
+    try {
+      const r = await window.storage.get("church_org_data_v1", true);
+      if (r && r.value) return JSON.parse(r.value);
+    } catch (e) {}
+    const seeded = emptyOrg();
+    try { await window.storage.set("church_org_data_v1", JSON.stringify(seeded), true); } catch (e) {}
+    return seeded;
+  }
+  try {
+    const raw = localStorage.getItem("church_org_data_v1");
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  const seeded = emptyOrg();
+  try { localStorage.setItem("church_org_data_v1", JSON.stringify(seeded)); } catch (e) {}
+  return seeded;
+}
+async function persistOrg(data) {
+  const json = JSON.stringify(data);
+  if (firestoreDb) { try { await firestoreDb.doc(FIRESTORE_ORG_DOC).set({ json }); return; } catch (e) { console.error("Firestore save failed", e); } }
+  if (window.storage) { try { await window.storage.set("church_org_data_v1", json, true); return; } catch (e) {} }
+  try { localStorage.setItem("church_org_data_v1", json); } catch (e) { console.error("save failed", e); }
+}
+async function loadSession() {
+  if (window.storage) { try { const r = await window.storage.get("church_session_user_id", false); return r ? r.value : null; } catch (e) { return null; } }
+  try { return localStorage.getItem("church_session_user_id"); } catch (e) { return null; }
+}
+async function saveSession(id) {
+  if (window.storage) { try { if (id) await window.storage.set("church_session_user_id", id, false); else await window.storage.delete("church_session_user_id", false); } catch (e) {} return; }
+  try { if (id) localStorage.setItem("church_session_user_id", id); else localStorage.removeItem("church_session_user_id"); } catch (e) {}
+}
+
+/* ==================================================================== */
+/*  App state                                                             */
+/* ==================================================================== */
+
+const App = {
+  org: null,
+  sessionUserId: null,
+  screen: "loading",
+  loginError: "",
+  forgotMode: false,
+  forgotEmail: "",
+  forgotStatus: "idle",
+  forgotError: "",
+  register: { mode: null, step: 0, name: "", email: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" },
+  view: "overview",
+  sidebarOpen: false,
+  viewingReportId: null,
+  showNewLocal: false,
+  templateDraft: { program: null, financial: null, survey: null },
+  templateDraftInput: { program: { label: "", type: "text" }, financial: { label: "", type: "text" }, survey: { label: "", type: "text" } },
+  templateDraftDoc: { program: null, financial: null, survey: null },
+  templateSavedFlash: null,
+  templateUploadFlash: null,
+  adminTemplateScope: null,
+  submitState: { done: false },
+  submitType: null,
+  editingReportId: null,
+  pdfBuilding: false,
+  showAddMember: false,
+  addMemberDraft: { level: "local", localId: "", position: "", name: "", email: "", password: "" },
+  parishSettingsDraft: null,
+
+  async init() {
+    const [org, sess] = await Promise.all([loadOrg(), loadSession()]);
+    this.org = org;
+    if (sess && org.users.some((u) => u.id === sess)) { this.sessionUserId = sess; this.screen = "app"; }
+    else this.screen = "landing";
+    this.render();
+  },
+
+  currentUser() { return this.org && this.sessionUserId ? this.org.users.find((u) => u.id === this.sessionUserId) || null : null; },
+
+  async updateOrg(mutator) {
+    const next = mutator(JSON.parse(JSON.stringify(this.org)));
+    this.org = next;
+    await persistOrg(next);
+    this.render();
+  },
+
+  goLanding() { this.screen = "landing"; this.render(); },
+  goLogin() { this.loginError = ""; this.screen = "login"; this.render(); },
+  goRegister() { this.register = { mode: null, step: 0, name: "", email: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" }; this.screen = "register"; this.render(); },
+
+  async doLogin(email, password) {
+    this.loginError = "";
+    if (firebaseAuth) {
+      try {
+        const cred = await firebaseAuth.signInWithEmailAndPassword(email.trim(), password);
+        const u = this.org.users.find((x) => x.id === cred.user.uid);
+        if (!u) { await firebaseAuth.signOut(); this.loginError = "Your account isn't registered in this parish register. Contact your IT admin."; this.render(); return; }
+        this.sessionUserId = u.id; await saveSession(u.id);
+        this.view = "overview"; this.screen = "app"; this.render();
+      } catch (e) { this.loginError = authErrorMessage(e); this.render(); }
+      return;
+    }
+    const u = this.org.users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase() && x.password === password);
+    if (!u) { this.loginError = "That email and password don't match a registered account."; this.render(); return; }
+    this.loginError = ""; this.sessionUserId = u.id;
+    await saveSession(u.id);
+    this.view = "overview"; this.screen = "app"; this.render();
+  },
+  async doLogout() { this.sessionUserId = null; await saveSession(null); if (firebaseAuth) { try { await firebaseAuth.signOut(); } catch (e) {} } this.screen = "landing"; this.render(); },
+
+  goForgotPassword() { this.forgotMode = true; this.forgotEmail = ""; this.forgotStatus = "idle"; this.forgotError = ""; this.render(); },
+  cancelForgotPassword() { this.forgotMode = false; this.render(); },
+  async sendPasswordReset(email) {
+    if (!firebaseAuth) { this.forgotStatus = "unavailable"; this.render(); return; }
+    const clean = email.trim();
+    if (!clean) { this.forgotStatus = "error"; this.forgotError = "Enter your email address."; this.render(); return; }
+    this.forgotStatus = "sending"; this.render();
+    try {
+      await firebaseAuth.sendPasswordResetEmail(clean);
+      this.forgotStatus = "sent";
+    } catch (e) {
+      if (e && e.code === "auth/user-not-found") this.forgotStatus = "sent"; // don't reveal whether the email is registered
+      else { this.forgotStatus = "error"; this.forgotError = authErrorMessage(e); }
+    }
+    this.render();
+  },
+
+  hasAdmin() { return this.org.users.some((u) => u.isAdmin); },
+
+  async createParish() {
+    const r = this.register;
+    if (this.org.users.some((u) => u.email.toLowerCase() === r.email.trim().toLowerCase())) { r.error = "That email is already registered."; this.render(); return; }
+    if (this.org.parishes.some((p) => p.name.trim().toLowerCase() === r.parishName.trim().toLowerCase())) { r.error = "A parish with that name is already registered."; this.render(); return; }
+    let userId;
+    if (firebaseAuth) {
+      try { userId = (await firebaseAuth.createUserWithEmailAndPassword(r.email.trim(), r.password)).user.uid; }
+      catch (e) { r.error = authErrorMessage(e); this.render(); return; }
+    } else { userId = uid(); }
+    const parishId = uid();
+    await this.updateOrg((o) => {
+      o.parishes.push({ id: parishId, name: r.parishName, location: r.parishLocation, presidentId: userId, logoDataUrl: null, createdAt: Date.now() });
+      o.users.push({ id: userId, name: r.name, email: r.email, ...(firebaseAuth ? {} : { password: r.password }), level: "parish", position: "President", parishId, localId: null, createdAt: Date.now() });
+      return o;
+    });
+    this.sessionUserId = userId; await saveSession(userId);
+    this.view = "overview"; this.screen = "app"; this.render();
+  },
+
+  async createAdmin() {
+    const r = this.register;
+    if (this.hasAdmin()) { r.error = "An IT admin is already registered for this register."; this.render(); return; }
+    if (this.org.users.some((u) => u.email.toLowerCase() === r.email.trim().toLowerCase())) { r.error = "That email is already registered."; this.render(); return; }
+    let userId;
+    if (firebaseAuth) {
+      try { userId = (await firebaseAuth.createUserWithEmailAndPassword(r.email.trim(), r.password)).user.uid; }
+      catch (e) { r.error = authErrorMessage(e); this.render(); return; }
+    } else { userId = uid(); }
+    let parishId = r.parishId;
+    await this.updateOrg((o) => {
+      if (!parishId) {
+        parishId = uid();
+        o.parishes.push({ id: parishId, name: r.parishName || "New Parish", location: r.parishLocation || "", presidentId: null, logoDataUrl: null, createdAt: Date.now() });
+      }
+      o.users.push({ id: userId, name: r.name, email: r.email, ...(firebaseAuth ? {} : { password: r.password }), level: "admin", isAdmin: true, position: "IT Admin", parishId, localId: null, createdAt: Date.now() });
+      return o;
+    });
+    this.sessionUserId = userId; await saveSession(userId);
+    this.view = "overview"; this.screen = "app"; this.render();
+  },
+
+  async joinOrg() {
+    const r = this.register;
+    if (this.org.users.some((u) => u.email.toLowerCase() === r.email.trim().toLowerCase())) { r.error = "That email is already registered."; this.render(); return; }
+    if (!r.position) { r.error = "Please choose a position."; this.render(); return; }
+    if (r.level === "local" && !r.localId) { r.error = "Please choose the local you're registering for."; this.render(); return; }
+    let userId;
+    if (firebaseAuth) {
+      try { userId = (await firebaseAuth.createUserWithEmailAndPassword(r.email.trim(), r.password)).user.uid; }
+      catch (e) { r.error = authErrorMessage(e); this.render(); return; }
+    } else { userId = uid(); }
+    await this.updateOrg((o) => {
+      o.users.push({ id: userId, name: r.name, email: r.email, ...(firebaseAuth ? {} : { password: r.password }), level: r.level, position: r.position, parishId: r.parishId, localId: r.level === "local" ? r.localId : null, termOpeningBalance: "", createdAt: Date.now() });
+      if (r.level === "local" && r.position === "President") { const l = o.locals.find((x) => x.id === r.localId); if (l) l.presidentId = userId; }
+      if (r.level === "parish" && r.position === "President") { const p = o.parishes.find((x) => x.id === r.parishId); if (p) p.presidentId = userId; }
+      return o;
+    });
+    this.sessionUserId = userId; await saveSession(userId);
+    this.view = "overview"; this.screen = "app"; this.render();
+  },
+
+  takenPositions(level, ownerId) { return this.org.users.filter((u) => u.level === level && (level === "parish" ? u.parishId === ownerId : u.localId === ownerId)).map((u) => u.position); },
+  availablePositions() {
+    const r = this.register;
+    if (r.level === "parish") return POSITIONS.filter((p) => !this.takenPositions("parish", r.parishId).includes(p));
+    if (r.level === "local") return POSITIONS.filter((p) => !this.takenPositions("local", r.localId).includes(p));
+    return [];
+  },
+
+  setView(v) { this.view = v; this.sidebarOpen = false; this.templateSavedFlash = null; this.render(); },
+  toggleSidebar(open) { this.sidebarOpen = open; this.render(); },
+
+  async createLocal(name, location) {
+    const user = this.currentUser();
+    await this.updateOrg((o) => { o.locals.push({ id: uid(), parishId: user.parishId, name, location, presidentId: null, createdAt: Date.now() }); return o; });
+    this.showNewLocal = false; this.render();
+  },
+
+  scopeFor(user) { return { level: user.level, id: user.level === "local" ? user.localId : user.parishId }; },
+  activeTemplateScope() {
+    const user = this.currentUser();
+    if (user.isAdmin && this.adminTemplateScope) return this.adminTemplateScope;
+    return this.scopeFor(user);
+  },
+
+  templateFor(type, scopeOverride) {
+    const { level, id } = scopeOverride || this.activeTemplateScope();
+    return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+  },
+  templateForSubmit(type) {
+    const { level, id } = this.scopeFor(this.currentUser());
+    return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+  },
+
+  openTemplateEditor(type) {
+    const t = this.templateFor(type);
+    this.templateDraft[type] = t ? t.fields.map((f) => ({ ...f })) : [];
+    this.templateDraftDoc[type] = t && t.docHtml ? { html: t.docHtml, fileName: t.docFileName || "template.docx" } : null;
+  },
+  setAdminTemplateScope(level, id) { this.adminTemplateScope = { level, id }; this.templateDraft = { program: null, financial: null, survey: null }; this.render(); },
+
+  async handleDocxUpload(type, file) {
+    if (!file) return;
+    this.templateUploadFlash = null; this.render();
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const [htmlResult, textResult] = await Promise.all([mammoth.convertToHtml({ arrayBuffer }), mammoth.extractRawText({ arrayBuffer })]);
+      const lines = textResult.value.split("\n").map((l) => l.trim()).filter((l) => l.length > 1 && !/^[=\-_*]{3,}$/.test(l));
+      const fields = lines.map((line) => ({ id: uid(), label: line.replace(/^[\d.\)\-\s]+/, "").trim() || line, type: guessFieldType(line) }));
+      this.templateDraft[type] = fields;
+      this.templateDraftDoc[type] = { html: htmlResult.value, fileName: file.name };
+      this.templateUploadFlash = { type, count: fields.length, fileName: file.name };
+    } catch (err) { console.error(err); this.templateUploadFlash = { type, error: true }; }
+    this.render();
+  },
+
+  addTemplateField(type) {
+    const draft = this.templateDraftInput[type];
+    if (!draft.label.trim()) return;
+    this.templateDraft[type].push({ id: uid(), label: draft.label.trim(), type: draft.type });
+    this.templateDraftInput[type] = { label: "", type: "text" };
+    this.render();
+  },
+  removeTemplateField(type, id) { this.templateDraft[type] = this.templateDraft[type].filter((f) => f.id !== id); this.render(); },
+
+  async saveTemplate(type) {
+    const { level, id } = this.activeTemplateScope();
+    const fields = this.templateDraft[type];
+    const doc = this.templateDraftDoc[type];
+    await this.updateOrg((o) => {
+      const idx = o.templates.findIndex((t) => t.ownerLevel === level && t.ownerId === id && t.type === type);
+      const patch = { fields, docHtml: doc ? doc.html : null, docFileName: doc ? doc.fileName : null, updatedAt: Date.now() };
+      if (idx >= 0) Object.assign(o.templates[idx], patch);
+      else o.templates.push({ id: uid(), ownerLevel: level, ownerId: id, type, ...patch });
+      return o;
+    });
+    this.templateSavedFlash = type; this.templateUploadFlash = null; this.render();
+    setTimeout(() => { if (this.templateSavedFlash === type) { this.templateSavedFlash = null; this.render(); } }, 1800);
+  },
+  clearDocxUpload(type) { this.templateDraftDoc[type] = null; this.templateUploadFlash = null; this.render(); },
+
+  goSubmit(type) {
+    this.submitType = type; this.editingReportId = null;
+    submitFormValues = {}; submitCustomFields = [];
+    this.submitState = { done: false };
+    this.view = "submit"; this.render();
+  },
+
+  async submitReport(type, values, frequency, eventName, customFields) {
+    const user = this.currentUser();
+    const { level, id } = this.scopeFor(user);
+    const template = this.templateForSubmit(type);
+    const now = Date.now();
+    const period = frequency === "weekly" ? `Week of ${new Date(now).toLocaleDateString()}` : frequency === "monthly" ? monthYearDisplay() : `${eventName || "Programme"} — ${new Date(now).toLocaleDateString()}`;
+    const editId = this.editingReportId;
+    await this.updateOrg((o) => {
+      const fieldsSnapshot = [...(template ? template.fields : []), ...customFields];
+      if (editId) {
+        const r = o.reports.find((x) => x.id === editId);
+        if (r) { r.data = values; r.frequency = frequency; r.eventName = eventName; r.period = period; r.fieldsSnapshot = fieldsSnapshot; r.editedAt = now; }
+      } else {
+        const regNo = String(o.reports.length + 1).padStart(4, "0");
+        o.reports.push({
+          id: uid(), ownerLevel: level, ownerId: id, type,
+          submittedBy: user.id, submitterName: user.name, position: user.position,
+          period, frequency, eventName, data: values, fieldsSnapshot,
+          docHtmlSnapshot: template ? template.docHtml : null, docFileNameSnapshot: template ? template.docFileName : null,
+          submittedAt: now, regNo,
+        });
+      }
+      return o;
+    });
+    this.submitState = { done: true }; this.editingReportId = null; this.render();
+    setTimeout(() => { this.submitState.done = false; this.render(); }, 2500);
+  },
+
+  viewReport(id) { this.viewingReportId = id; this.render(); },
+  closeReportView() { this.viewingReportId = null; this.render(); },
+  editReport(id) {
+    const r = this.org.reports.find((x) => x.id === id);
+    if (!r) return;
+    this.editingReportId = id; this.submitType = r.type;
+    this.submitState = { done: false };
+    submitFormValues = { ...r.data };
+    const template = this.templateForSubmit(r.type);
+    const templateIds = new Set((template ? template.fields : []).map((f) => f.id));
+    submitCustomFields = (r.fieldsSnapshot || []).filter((f) => !templateIds.has(f.id)).map((f) => ({ ...f }));
+    this.view = "submit"; this.render();
+  },
+  cancelEditReport() { this.editingReportId = null; submitFormValues = {}; submitCustomFields = []; this.render(); },
+
+  async updateProfile(patch) {
+    const user = this.currentUser();
+    await this.updateOrg((o) => { const u = o.users.find((x) => x.id === user.id); if (u) Object.assign(u, patch); return o; });
+  },
+
+  async removeMember(userId) {
+    const user = this.currentUser();
+    if (userId === user.id) { alert("You can't remove your own account here."); return; }
+    await this.updateOrg((o) => {
+      o.users = o.users.filter((u) => u.id !== userId);
+      o.locals.forEach((l) => { if (l.presidentId === userId) l.presidentId = null; });
+      o.parishes.forEach((p) => { if (p.presidentId === userId) p.presidentId = null; });
+      return o;
+    });
+  },
+  async sendMemberResetEmail(userId) {
+    const u = this.org.users.find((x) => x.id === userId);
+    if (!u) return;
+    if (firebaseAuth) {
+      try { await firebaseAuth.sendPasswordResetEmail(u.email); alert(`Password reset email sent to ${u.email}.`); }
+      catch (e) { alert(authErrorMessage(e)); }
+      return;
+    }
+    const next = prompt(`Set a new password for ${u.name} (${u.email}):`);
+    if (!next) return;
+    if (next.trim().length < 4) { alert("Password should be at least 4 characters."); return; }
+    await this.updateOrg((o) => { const m = o.users.find((x) => x.id === userId); if (m) m.password = next.trim(); return o; });
+    alert(`New password set for ${u.name}. Share it with them directly.`);
+  },
+  async addMember() {
+    const d = this.addMemberDraft;
+    if (this.org.users.some((u) => u.email.toLowerCase() === d.email.trim().toLowerCase())) { alert("That email is already registered."); return; }
+    if (!d.position) { alert("Please choose a position."); return; }
+    const admin = this.currentUser();
+    let userId;
+    if (secondaryAuth) {
+      // Create the account on a separate Firebase app instance so it doesn't sign the admin out.
+      try {
+        const cred = await secondaryAuth.createUserWithEmailAndPassword(d.email.trim(), d.password);
+        userId = cred.user.uid;
+        await secondaryAuth.signOut();
+      } catch (e) { alert(authErrorMessage(e)); return; }
+    } else { userId = uid(); }
+    await this.updateOrg((o) => {
+      o.users.push({ id: userId, name: d.name, email: d.email, ...(firebaseAuth ? {} : { password: d.password }), level: d.level, position: d.position, parishId: admin.parishId, localId: d.level === "local" ? d.localId : null, termOpeningBalance: "", createdAt: Date.now() });
+      if (d.position === "President") {
+        if (d.level === "local") { const l = o.locals.find((x) => x.id === d.localId); if (l) l.presidentId = userId; }
+        else { const p = o.parishes.find((x) => x.id === admin.parishId); if (p) p.presidentId = userId; }
+      }
+      return o;
+    });
+    this.showAddMember = false; this.render();
+  },
+  memberAvailablePositions() {
+    const d = this.addMemberDraft;
+    if (d.level === "parish") return POSITIONS.filter((p) => !this.takenPositions("parish", this.currentUser().parishId).includes(p));
+    if (d.level === "local" && d.localId) return POSITIONS.filter((p) => !this.takenPositions("local", d.localId).includes(p));
+    return [];
+  },
+
+  async saveParishSettings(name, location) {
+    const admin = this.currentUser();
+    await this.updateOrg((o) => { const p = o.parishes.find((x) => x.id === admin.parishId); if (p) { p.name = name; p.location = location; } return o; });
+  },
+  async uploadParishLogo(file) {
+    if (!file) return;
+    const dataUrl = await fileToDataUrl(file);
+    const admin = this.currentUser();
+    await this.updateOrg((o) => { const p = o.parishes.find((x) => x.id === admin.parishId); if (p) p.logoDataUrl = dataUrl; return o; });
+  },
+  async uploadSignature(file) {
+    if (!file) return;
+    const dataUrl = await fileToDataUrl(file);
+    await this.updateProfile({ signatureDataUrl: dataUrl });
+  },
+
+  render() { render(); },
+};
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ==================================================================== */
+/*  Shared small components                                              */
+/* ==================================================================== */
+
+function btnHtml({ variant = "primary", extraClass = "", attrs = "", label, iconName, size = 14 }) {
+  const cls = variant === "primary" ? "cra-btn-primary" : variant === "secondary" ? "cra-btn-secondary" : variant === "danger" ? "cra-btn-danger" : "cra-btn-ghost";
+  return `<button class="cra-btn ${cls} ${extraClass}" ${attrs}>${iconName ? icon(iconName, size) : ""}${label}</button>`;
+}
+function badge(tone, text, iconName) { return `<span class="cra-badge cra-badge-${tone}">${iconName ? icon(iconName, 11) : ""}${esc(text)}</span>`; }
+function fieldWrap(label, inner) { return `<div><label class="cra-label">${esc(label)}</label>${inner}</div>`; }
+function emptyState(iconName, title, hint, actionHtml) {
+  return `<div class="col items-center text-center py-14 px-6">
+    <div class="cra-seal mb-4" style="width:56px;height:56px">${icon(iconName, 22)}</div>
+    <p class="cra-display text-lg mb-1">${esc(title)}</p>
+    <p class="text-sm" style="color:var(--ink-soft);max-width:26rem;margin:0 auto">${esc(hint)}</p>
+    ${actionHtml ? `<div class="mt-5">${actionHtml}</div>` : ""}
+  </div>`;
+}
+function pageHeader(eyebrow, title, subtitle, actionHtml) {
+  return `<div class="row wrap items-start justify-between gap-4 mb-6">
+    <div>
+      ${eyebrow ? `<div class="cra-label mb-1" style="color:var(--wine)">${esc(eyebrow)}</div>` : ""}
+      <h1 class="cra-display text-2xl">${esc(title)}</h1>
+      ${subtitle ? `<p class="text-sm mt-1" style="color:var(--ink-soft);max-width:36rem">${esc(subtitle)}</p>` : ""}
+    </div>
+    ${actionHtml || ""}
+  </div>`;
+}
+function errorNote(text) { return `<div class="row items-start gap-2 text-sm p-2" style="background:#f8ecea;color:var(--danger);border-radius:8px">${icon("alert", 15)} <span>${esc(text)}</span></div>`; }
+
+/* ==================================================================== */
+/*  Landing                                                               */
+/* ==================================================================== */
+
+function renderLanding() {
+  return `<div class="col cra-bg" style="min-height:100vh">
+    <header class="row items-center justify-between px-6 py-6 sm-block">
+      <div class="row items-center gap-2" style="margin-bottom:0.5rem">
+        <div class="cra-seal" style="width:38px;height:38px">${icon("church", 16)}</div>
+        <span class="cra-display text-lg">Parish Register</span>
+      </div>
+      <div class="row gap-2">
+        ${btnHtml({ variant: "ghost", label: "Log in", attrs: `onclick="App.goLogin()"` })}
+        ${btnHtml({ variant: "primary", label: "Register", attrs: `onclick="App.goRegister()"` })}
+      </div>
+    </header>
+    <main class="flex-1 row items-center px-6 py-10" style="display:flex">
+      <div class="max-w-6xl mx-auto grid sm-grid-2" style="width:100%;gap:3.5rem;align-items:center;grid-template-columns:1fr">
+        <div class="cra-fade-in">
+          ${badge("gold", "Reg. No. keeps every submission accountable", "scroll")}
+          <h1 class="cra-display text-4xl" style="line-height:1.08;margin-top:1.25rem">One register for every parish, local &amp; report.</h1>
+          <p class="text-base mt-5" style="color:var(--ink-soft);max-width:28rem">
+            Secretaries, financial secretaries and treasurers fill in the report your parish has laid out.
+            The president reviews and downloads a finished PDF — nothing gets rewritten after it's signed.
+          </p>
+          <div class="row wrap gap-3 mt-8">
+            ${btnHtml({ variant: "primary", label: "Start a registration", attrs: `onclick="App.goRegister()"` })}
+            ${btnHtml({ variant: "ghost", label: "I already have an account", attrs: `onclick="App.goLogin()"` })}
+          </div>
+        </div>
+        <div class="cra-card cra-card-accent p-6 cra-fade-in">
+          <div class="cra-label mb-4" style="color:var(--violet)">How the hierarchy works</div>
+          <ol class="space-y-4 text-sm" style="list-style:none;margin:0;padding:0">
+            ${[
+              ["An IT admin sets up the parish", "one account, once — registers the parish, then manages members and templates."],
+              ["A president registers each local", "under the parish before that local's officers can join."],
+              ["Local &amp; parish executives register", "choosing their position — secretary, financial secretary, treasurer, and so on."],
+              ["Secretaries &amp; treasurers fill in reports", "weekly, monthly, or whenever a programme is held — the date is recorded automatically."],
+              ["The president reviews &amp; downloads a PDF", "read only, signatures included, ready to print."],
+            ].map(([b, rest], i) => `<li class="row gap-3"><span class="cra-mono font-semibold" style="color:var(--gold)">${String(i + 1).padStart(2, "0")}</span><span><b>${b}</b> ${rest}</span></li>`).join("")}
+          </ol>
+        </div>
+      </div>
+    </main>
+  </div>`;
+}
+
+/* ==================================================================== */
+/*  Login                                                                 */
+/* ==================================================================== */
+
+function renderLogin() {
+  if (App.forgotMode) return renderForgotPassword();
+  return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
+    <div class="w-full max-w-md cra-fade-in">
+      <button class="row items-center gap-1 text-sm mb-6" style="color:var(--ink-soft);cursor:pointer" onclick="App.goLanding()">${icon("arrowLeft", 14)} Back</button>
+      <div class="cra-card cra-card-accent p-7">
+        <div class="row items-center gap-2 mb-5">
+          <div class="cra-seal cra-display text-sm">†</div>
+          <div><h2 class="cra-display text-xl">Welcome back</h2><p class="text-xs" style="color:var(--ink-soft)">Log in to your parish or local portal</p></div>
+        </div>
+        <form class="space-y-4" onsubmit="return handleLoginSubmit(event)">
+          ${fieldWrap("Email", `<div class="relative">${icon("mail", 14, "")}<input id="login-email" class="cra-input" style="padding-left:2rem" type="email" required placeholder="you@parish.org" /></div>`)}
+          ${fieldWrap("Password", `<div class="relative">${icon("lock", 14, "")}<input id="login-password" class="cra-input" style="padding-left:2rem" type="password" required placeholder="••••••••" /></div>`)}
+          ${App.loginError ? errorNote(App.loginError) : ""}
+          ${btnHtml({ variant: "primary", label: "Log in", extraClass: "w-full", attrs: `type="submit"` })}
+        </form>
+        <p class="text-sm text-center mt-4" style="color:var(--ink-soft)"><button class="link-btn" onclick="App.goForgotPassword()">Forgot your password?</button></p>
+        <p class="text-sm text-center mt-2" style="color:var(--ink-soft)">No account yet? <button class="link-btn" onclick="App.goRegister()">Register here</button></p>
+      </div>
+    </div>
+  </div>`;
+}
+function handleLoginSubmit(e) { e.preventDefault(); App.doLogin(document.getElementById("login-email").value, document.getElementById("login-password").value); return false; }
+
+function renderForgotPassword() {
+  const s = App.forgotStatus;
+  let body;
+  if (!firebaseAuth) {
+    body = emptyState("lock", "Self-service reset isn't available", "This preview isn't connected to live accounts yet. Ask your IT admin to reset your password from the Members page instead.");
+  } else if (s === "sent") {
+    body = emptyState("check", "Check your email", `If ${esc(App.forgotEmail)} is registered, a password reset link is on its way. It can take a minute or two — check spam too.`);
+  } else {
+    body = `<form class="space-y-4" onsubmit="return handleForgotSubmit(event)">
+      ${fieldWrap("Email", `<div class="relative">${icon("mail", 14, "")}<input id="forgot-email" class="cra-input" style="padding-left:2rem" type="email" required placeholder="you@parish.org" value="${esc(App.forgotEmail)}" /></div>`)}
+      ${s === "error" ? errorNote(App.forgotError) : ""}
+      ${btnHtml({ variant: "primary", label: s === "sending" ? "Sending…" : "Send reset link", extraClass: "w-full", attrs: `type="submit" ${s === "sending" ? "disabled" : ""}` })}
+    </form>`;
+  }
+  return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
+    <div class="w-full max-w-md cra-fade-in">
+      <button class="row items-center gap-1 text-sm mb-6" style="color:var(--ink-soft);cursor:pointer" onclick="App.cancelForgotPassword()">${icon("arrowLeft", 14)} Back to log in</button>
+      <div class="cra-card cra-card-accent p-7">
+        <div class="row items-center gap-2 mb-5">
+          <div class="cra-seal cra-display text-sm">†</div>
+          <div><h2 class="cra-display text-xl">Reset your password</h2><p class="text-xs" style="color:var(--ink-soft)">We'll email you a link to choose a new one</p></div>
+        </div>
+        ${body}
+      </div>
+    </div>
+  </div>`;
+}
+function handleForgotSubmit(e) { e.preventDefault(); App.forgotEmail = document.getElementById("forgot-email").value; App.sendPasswordReset(App.forgotEmail); return false; }
+
+/* ==================================================================== */
+/*  Registration wizard                                                  */
+/* ==================================================================== */
+
+function wizardShell(title, step, total, bodyHtml, onBack) {
+  const dots = Array.from({ length: total }).map((_, i) => `<div class="stepdot" style="width:${i === step ? 26 : 14}px;background:${i <= step ? "var(--wine)" : "var(--line)"}"></div>`).join("");
+  return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
+    <div class="w-full max-w-lg cra-fade-in">
+      <button class="row items-center gap-1 text-sm mb-5" style="color:var(--ink-soft);cursor:pointer" onclick="${onBack}">${icon("arrowLeft", 14)} Back</button>
+      <div class="cra-card cra-card-accent p-7">
+        <div class="row gap-1 mb-6">${dots}</div>
+        <h2 class="cra-display text-xl mb-5">${esc(title)}</h2>
+        ${bodyHtml}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderRegister() {
+  const r = App.register;
+
+  if (!r.mode) {
+    return wizardShell("Let's get you registered", 0, 3, `
+      <div class="grid sm-grid-2">
+        ${!App.hasAdmin() ? `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="setRegMode('admin')">
+          <div class="cra-seal mb-3" style="width:40px;height:40px">${icon("cog", 17)}</div>
+          <div class="font-semibold mb-1">Register as IT Admin</div>
+          <p class="text-sm" style="color:var(--ink-soft)">One account for the whole register — manages members, templates &amp; parish settings.</p>
+        </button>` : ""}
+        <button class="cra-card p-5 text-left" style="cursor:pointer" onclick="setRegMode('new_parish')">
+          <div class="cra-seal mb-3" style="width:40px;height:40px">${icon("landmark", 17)}</div>
+          <div class="font-semibold mb-1">Start a new parish</div>
+          <p class="text-sm" style="color:var(--ink-soft)">Your parish isn't registered yet. Set it up and become its president.</p>
+        </button>
+        <button class="cra-card p-5 text-left" style="cursor:pointer" onclick="setRegMode('join')">
+          <div class="cra-seal mb-3" style="width:40px;height:40px">${icon("building", 17)}</div>
+          <div class="font-semibold mb-1">Join a parish or local</div>
+          <p class="text-sm" style="color:var(--ink-soft)">Your parish is already registered. Join as a parish or local executive.</p>
+        </button>
+      </div>
+      <p class="text-sm text-center mt-6" style="color:var(--ink-soft)">Already registered? <button class="link-btn" onclick="App.goLogin()">Log in</button></p>
+    `, "App.goLanding()");
+  }
+
+  if (r.mode === "admin") {
+    if (App.hasAdmin()) return wizardShell("IT Admin already registered", 1, 2, emptyState("cog", "One IT admin only", "This register already has an IT admin account. Ask them for access, or log in if that's you."), "setRegMode(null)");
+    const parishes = App.org.parishes;
+    return wizardShell("Register as IT Admin", 1, 2, `
+      <form class="space-y-4" onsubmit="return handleAdminSubmit(event)">
+        ${parishes.length > 0 ? fieldWrap("Parish", `<select id="reg-parishId" class="cra-select" onchange="App.register.parishId=this.value">
+            <option value="">Create a new parish…</option>
+            ${parishes.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
+          </select>`) : ""}
+        <div id="admin-new-parish-fields" class="space-y-4">
+          ${fieldWrap("Parish name", `<input id="reg-parishName" class="cra-input" placeholder="e.g. St. Kizito Parish" value="${esc(r.parishName)}" />`)}
+          ${fieldWrap("Location", `<input id="reg-parishLocation" class="cra-input" placeholder="Town / city" value="${esc(r.parishLocation)}" />`)}
+        </div>
+        <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details</div>
+        ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
+        ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+        ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
+        ${r.error ? errorNote(r.error) : ""}
+        ${btnHtml({ variant: "primary", label: "Register as IT Admin", extraClass: "w-full", attrs: `type="submit"` })}
+      </form>
+    `, "setRegMode(null)");
+  }
+
+  if (r.mode === "new_parish") {
+    return wizardShell("Register your parish", 1, 2, `
+      <form class="space-y-4" onsubmit="return handleNewParishSubmit(event)">
+        <div class="cra-label" style="color:var(--violet)">Parish details</div>
+        ${fieldWrap("Parish name", `<input id="reg-parishName" class="cra-input" required placeholder="e.g. St. Kizito Parish" value="${esc(r.parishName)}" />`)}
+        ${fieldWrap("Location", `<div class="relative">${icon("pin", 14)}<input id="reg-parishLocation" class="cra-input" style="padding-left:2rem" required placeholder="Town / city" value="${esc(r.parishLocation)}" /></div>`)}
+        <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details · you'll be registered as President</div>
+        ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
+        ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+        ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
+        ${r.error ? errorNote(r.error) : ""}
+        ${btnHtml({ variant: "primary", label: "Register parish &amp; create my account", extraClass: "w-full", attrs: `type="submit"` })}
+      </form>
+    `, "setRegMode(null)");
+  }
+
+  if (r.mode === "join") {
+    if (r.step === 0) {
+      const parishes = App.org.parishes;
+      return wizardShell("Which parish?", 0, 3, `
+        ${parishes.length === 0 ? emptyState("landmark", "No parishes registered yet", "Ask your parish president or IT admin to register the parish first.") : `
+        <div class="space-y-2">${parishes.map((p) => `<button class="w-full cra-card p-4 row items-center justify-between text-left" style="cursor:pointer" onclick="pickRegParish('${p.id}')"><div><div class="font-semibold">${esc(p.name)}</div><div class="text-xs" style="color:var(--ink-soft)">${esc(p.location)}</div></div>${icon("chevronRight", 16)}</button>`).join("")}</div>`}
+      `, "setRegMode(null)");
+    }
+    if (r.step === 1) {
+      return wizardShell("Parish or local executive?", 1, 3, `
+        <div class="grid sm-grid-2">
+          <button class="cra-card p-5 text-left" style="cursor:pointer" onclick="pickRegLevel('parish')"><div class="cra-seal mb-3" style="width:40px;height:40px">${icon("shield", 17)}</div><div class="font-semibold mb-1">Parish executive</div><p class="text-sm" style="color:var(--ink-soft)">Serve on the parish executive body directly.</p></button>
+          <button class="cra-card p-5 text-left" style="cursor:pointer" onclick="pickRegLevel('local')"><div class="cra-seal mb-3" style="width:40px;height:40px">${icon("building", 17)}</div><div class="font-semibold mb-1">Local executive</div><p class="text-sm" style="color:var(--ink-soft)">Serve on the executive of a local under this parish.</p></button>
+        </div>
+      `, "setRegStep(0)");
+    }
+    if (r.step === 2) {
+      const needsLocalPick = r.level === "local";
+      const localsForParish = App.org.locals.filter((l) => l.parishId === r.parishId);
+      if (needsLocalPick && localsForParish.length === 0) return wizardShell("No locals registered", 2, 3, emptyState("building", "This parish hasn't registered any locals yet", "Only the parish president (or IT admin) can register a local. Ask them to add your local, then come back."), "setRegStep(1)");
+      const posOptions = (needsLocalPick ? r.localId : true) ? App.availablePositions() : [];
+      return wizardShell(needsLocalPick ? "Local executive details" : "Parish executive details", 2, 3, `
+        <form class="space-y-4" onsubmit="return handleJoinSubmit(event)">
+          ${needsLocalPick ? fieldWrap("Local", `<select id="reg-localId" class="cra-select" required onchange="pickRegLocal(this.value)"><option value="">Select your local…</option>${localsForParish.map((l) => `<option value="${l.id}" ${r.localId === l.id ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select>`) : ""}
+          ${(!needsLocalPick || r.localId) ? fieldWrap("Position", `<select id="reg-position" class="cra-select" required onchange="App.register.position=this.value"><option value="">Select your position…</option>${posOptions.map((p) => `<option value="${p}" ${r.position === p ? "selected" : ""}>${p}</option>`).join("")}</select>${posOptions.length === 0 ? `<p class="text-xs mt-1" style="color:var(--danger)">Every position here is already filled.</p>` : ""}`) : ""}
+          <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details</div>
+          ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
+          ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+          ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
+          ${r.error ? errorNote(r.error) : ""}
+          ${btnHtml({ variant: "primary", label: "Complete registration", extraClass: "w-full", attrs: `type="submit" ${posOptions.length === 0 ? "disabled" : ""}` })}
+        </form>
+      `, "setRegStep(1)");
+    }
+  }
+  return "";
+}
+
+function setRegMode(mode) { App.register.mode = mode; App.register.step = 0; App.register.error = ""; App.render(); }
+function setRegStep(step) { App.register.step = step; App.register.error = ""; App.render(); }
+function pickRegParish(id) { App.register.parishId = id; App.register.step = 1; App.render(); }
+function pickRegLevel(level) { App.register.level = level; App.register.position = ""; App.register.step = 2; App.render(); }
+function pickRegLocal(id) { App.register.localId = id; App.register.position = ""; App.render(); }
+
+function syncRegIdentity() {
+  App.register.name = document.getElementById("reg-name").value;
+  App.register.email = document.getElementById("reg-email").value;
+  App.register.password = document.getElementById("reg-password").value;
+}
+function handleNewParishSubmit(e) {
+  e.preventDefault();
+  App.register.parishName = document.getElementById("reg-parishName").value;
+  App.register.parishLocation = document.getElementById("reg-parishLocation").value;
+  syncRegIdentity(); App.createParish(); return false;
+}
+function handleAdminSubmit(e) {
+  e.preventDefault();
+  const parishSel = document.getElementById("reg-parishId");
+  App.register.parishId = parishSel ? parishSel.value : "";
+  App.register.parishName = document.getElementById("reg-parishName").value;
+  App.register.parishLocation = document.getElementById("reg-parishLocation").value;
+  syncRegIdentity(); App.createAdmin(); return false;
+}
+function handleJoinSubmit(e) {
+  e.preventDefault();
+  syncRegIdentity();
+  const posEl = document.getElementById("reg-position");
+  if (posEl) App.register.position = posEl.value;
+  App.joinOrg(); return false;
+}
+
+/* ==================================================================== */
+/*  Report text / PDF export                                             */
+/* ==================================================================== */
+
+function ctxForReport(r) {
+  const user = App.currentUser();
+  const parish = App.org.parishes.find((p) => p.id === user.parishId);
+  return { parish, parishName: parish ? parish.name : "", localName: r.ownerLevel === "local" ? (App.org.locals.find((l) => l.id === r.ownerId) || {}).name : (r.localName || null) };
+}
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function buildReportText(report, ctx) {
+  const lines = [];
+  lines.push("=".repeat(46)); lines.push(ctx.parishName.toUpperCase());
+  if (ctx.localName) lines.push(ctx.localName);
+  lines.push("=".repeat(46));
+  lines.push(`Register No: ${report.regNo}`);
+  lines.push(`Report type: ${reportTypeLabel(report.type)}`);
+  lines.push(`Reporting period: ${report.period || "—"}`);
+  lines.push(`Submitted by: ${report.submitterName} (${report.position})`);
+  lines.push(`Submitted on: ${new Date(report.submittedAt).toLocaleString()}`);
+  lines.push("-".repeat(46));
+  (report.fieldsSnapshot || []).forEach((f) => { lines.push(f.label + ":"); lines.push("  " + (String(report.data[f.id] ?? "").trim() || "—")); lines.push(""); });
+  lines.push("-".repeat(46));
+  lines.push("Reviewed & downloaded via the parish register. Read-only record.");
+  return lines.join("\n");
+}
+function downloadReport(reportId) {
+  const report = App.org.reports.find((r) => r.id === reportId);
+  downloadText(`report-${report.regNo}.txt`, buildReportText(report, ctxForReport(report)));
+}
+
+function signatureBlock(user, label) {
+  if (!user) return "";
+  return `<div style="margin-top:10px;display:inline-block;text-align:center">
+    ${user.signatureDataUrl ? `<img src="${user.signatureDataUrl}" style="max-height:40px;max-width:150px;display:block;margin:0 auto 2px" />` : `<div style="height:40px"></div>`}
+    <div style="border-top:1px solid #211f2e;padding-top:2px;font-size:10.5px">${esc(user.name)} — ${esc(label)}</div>
+  </div>`;
+}
+
+function buildFilledReportHtml(report, ctx) {
+  const submitter = App.org.users.find((u) => u.id === report.submittedBy);
+  const header = `
+    ${ctx.parish && ctx.parish.logoDataUrl ? `<div style="text-align:center;margin-bottom:8px"><img src="${ctx.parish.logoDataUrl}" style="height:56px" /></div>` : ""}
+    <div style="font-family:'Fraunces',Georgia,serif;text-align:center;margin-bottom:18px">
+      <div style="font-size:19px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${esc(ctx.parishName)}</div>
+      ${ctx.localName ? `<div style="font-size:14px;color:#57536b">${esc(ctx.localName)}</div>` : ""}
+      <div style="font-size:12px;color:#57536b;margin-top:8px">${esc(reportTypeLabel(report.type))} &middot; Reg. No ${esc(report.regNo)}</div>
+    </div>
+    <table style="width:100%;font-size:12px;margin-bottom:16px;border-collapse:collapse">
+      <tr><td style="padding:2px 0;color:#57536b">Reporting period</td><td style="padding:2px 0;font-weight:600">${esc(report.period || "—")}</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Submitted by</td><td style="padding:2px 0;font-weight:600">${esc(report.submitterName)} (${esc(report.position)})</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Date recorded</td><td style="padding:2px 0;font-weight:600">${new Date(report.submittedAt).toLocaleString()}</td></tr>
+    </table>
+    <hr style="border:none;border-top:1px solid #d9d4c4;margin-bottom:16px" />`;
+
+  const fields = report.fieldsSnapshot || [];
+  const answerBlock = (f) => `<div style="margin:4px 0 14px 0;padding:8px 10px;background:#f5f3ea;border-left:3px solid #a3812f;font-size:12.5px;white-space:pre-wrap">${esc(String(report.data[f.id] ?? "").trim() || "—")}</div>`;
+
+  let body;
+  if (report.docHtmlSnapshot) {
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = report.docHtmlSnapshot;
+    const blocks = Array.from(wrapper.children).length ? Array.from(wrapper.children) : [wrapper];
+    const matchedIds = new Set();
+    blocks.forEach((el) => {
+      const text = (el.textContent || "").trim();
+      const f = fields.find((fld) => !matchedIds.has(fld.id) && text && text.indexOf(fld.label) !== -1);
+      if (f) { matchedIds.add(f.id); el.insertAdjacentHTML("afterend", answerBlock(f)); }
+    });
+    body = wrapper.innerHTML;
+    const leftover = fields.filter((f) => !matchedIds.has(f.id));
+    if (leftover.length) {
+      body += `<div style="margin-top:18px"><div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#57536b;margin-bottom:8px">Additional items</div>`;
+      leftover.forEach((f) => { body += `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${answerBlock(f)}`; });
+      body += `</div>`;
+    }
+  } else {
+    body = fields.map((f) => `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${answerBlock(f)}`).join("");
+  }
+
+  const footer = `
+    <div style="margin-top:26px;display:flex;justify-content:space-between;gap:16px">
+      ${signatureBlock(submitter, report.position)}
+    </div>
+    <div style="margin-top:24px;font-size:10px;color:#8a8698;text-align:center">Reviewed &amp; downloaded via the parish register. Read-only record.</div>`;
+
+  return `<div style="font-family:'Inter',ui-sans-serif,sans-serif;color:#211f2e;background:#ffffff;padding:28px;max-width:720px">${header}${body}${footer}</div>`;
+}
+
+async function downloadReportPdf(reportId) {
+  const report = App.org.reports.find((r) => r.id === reportId);
+  const ctx = ctxForReport(report);
+  App.pdfBuilding = reportId; App.render();
+  const container = document.createElement("div");
+  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
+  container.innerHTML = buildFilledReportHtml(report, ctx);
+  document.body.appendChild(container);
+  try {
+    await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
+  } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser. Try the .txt download instead."); }
+  finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
+}
+
+function reportViewModalHtml(report) {
+  const ctx = ctxForReport(report);
+  const submitter = App.org.users.find((u) => u.id === report.submittedBy);
+  return `<div class="modal-overlay" onmousedown="if(event.target===event.currentTarget) App.closeReportView()">
+    <div class="cra-paper modal-box cra-fade-in max-w-2xl cra-scrollbar" style="border:1px solid var(--line)">
+      <div class="row items-center justify-between px-5 py-4" style="border-bottom:1px solid var(--line)">
+        <h3 class="cra-display text-lg">Register No. ${esc(report.regNo)}</h3>
+        <button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.closeReportView()">${icon("x", 16)}</button>
+      </div>
+      <div class="p-5">
+        <div class="row wrap items-center gap-2 mb-4">
+          ${badge(REPORT_TYPE_TONE[report.type], reportTypeLabel(report.type), REPORT_TYPE_ICON[report.type])}
+          ${badge("gold", report.period || "No period given")}
+        </div>
+        <div class="cra-card p-4 mb-4" style="background:#f5f3ea">
+          <div class="text-xs" style="color:var(--ink-soft)">${esc(ctx.parishName)}${ctx.localName ? ` · ${esc(ctx.localName)}` : ""}</div>
+          <div class="text-sm font-semibold mt-1">Submitted by ${esc(report.submitterName)} · ${esc(report.position)}</div>
+          <div class="text-xs" style="color:var(--ink-soft)">${new Date(report.submittedAt).toLocaleString()}</div>
+          ${submitter && submitter.signatureDataUrl ? `<img class="sig-thumb mt-2" src="${submitter.signatureDataUrl}" />` : ""}
+        </div>
+        <div class="space-y-3">
+          ${(report.fieldsSnapshot || []).map((f) => `<div class="cra-ledger-row" style="padding-bottom:0.75rem"><div class="cra-label mb-1">${esc(f.label)}</div><div class="text-sm whitespace-pre-wrap">${esc(String(report.data[f.id] ?? "").trim() || "—")}</div></div>`).join("")}
+        </div>
+        <div class="row wrap justify-end gap-2 mt-5">
+          ${report.submittedBy === App.currentUser().id ? btnHtml({ variant: "ghost", label: "Edit answers", attrs: `onclick="App.closeReportView(); App.editReport('${report.id}')"` }) : ""}
+          ${btnHtml({ variant: "ghost", label: "Download .txt", iconName: "download", attrs: `onclick="downloadReport('${report.id}')"` })}
+          ${btnHtml({ variant: "primary", label: App.pdfBuilding === report.id ? "Building PDF…" : "Download filled PDF", iconName: "download", attrs: `onclick="downloadReportPdf('${report.id}')" ${App.pdfBuilding === report.id ? "disabled" : ""}` })}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ==================================================================== */
+/*  Template builder                                                     */
+/* ==================================================================== */
+
+function templateEditorHtml(type) {
+  if (App.templateDraft[type] === null) App.openTemplateEditor(type);
+  const fields = App.templateDraft[type];
+  const draft = App.templateDraftInput[type];
+  const saved = App.templateSavedFlash === type;
+  const doc = App.templateDraftDoc[type];
+  const flash = App.templateUploadFlash && App.templateUploadFlash.type === type ? App.templateUploadFlash : null;
+  return `<div class="cra-card cra-card-accent p-5">
+    <div class="row items-center justify-between mb-4">
+      <div class="row items-center gap-2">${icon(REPORT_TYPE_ICON[type], 16, "")}<h3 class="cra-display text-lg">${reportTypeLabel(type)} template</h3></div>
+      ${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}
+    </div>
+    <div class="p-3 mb-4" style="background:#f5f3ea;border-radius:8px;border:1px dashed var(--gold)">
+      <div class="cra-label mb-2" style="color:var(--violet)">Upload a Word (.docx) template</div>
+      <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Each line becomes a question below; the layout is reused when building the filled-in PDF.</p>
+      <div class="row wrap items-center gap-2">
+        <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("upload", 14)} ${doc ? "Replace file" : "Choose .docx file"}
+          <input type="file" accept=".docx" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.handleDocxUpload('${type}', this.files[0])" /></label>
+        ${doc ? `<span class="text-xs row items-center gap-1" style="color:var(--ink-soft)">${icon("file", 13)} ${esc(doc.fileName)}</span><button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.clearDocxUpload('${type}')">${icon("x", 12)} Remove</button>` : ""}
+      </div>
+      ${flash && flash.error ? `<div class="mt-2">${errorNote("Couldn't read that file — please upload a .docx Word document.")}</div>` : ""}
+      ${flash && !flash.error ? `<p class="text-xs mt-2 row items-center gap-1" style="color:var(--green)">${icon("check", 12)} Loaded ${flash.count} question${flash.count !== 1 ? "s" : ""} from ${esc(flash.fileName)} — review below, then save.</p>` : ""}
+    </div>
+    ${fields.length === 0 ? `<p class="text-sm mb-4" style="color:var(--ink-soft)">No fields yet — add questions below.</p>` : `
+    <div class="space-y-2 mb-4">
+      ${fields.map((f, i) => `<div class="row items-center gap-2 p-2" style="border:1px solid var(--line);border-radius:8px">${icon("grip", 14)}<span class="cra-mono text-xs" style="width:20px;color:var(--ink-soft)">${String(i + 1).padStart(2, "0")}</span><span class="text-sm font-medium flex-1">${esc(f.label)}</span>${badge("violet", FIELD_TYPES.find((t) => t.value === f.type)?.label || f.type)}<button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.removeTemplateField('${type}','${f.id}')">${icon("trash", 13)}</button></div>`).join("")}
+    </div>`}
+    <div class="row sm-row gap-2 p-3" style="background:#f5f3ea;border-radius:8px;flex-direction:column">
+      <input class="cra-input flex-1" placeholder="e.g. Number of new members" value="${esc(draft.label)}" oninput="App.templateDraftInput['${type}'].label=this.value" />
+      <select class="cra-select" style="max-width:160px" onchange="App.templateDraftInput['${type}'].type=this.value">${FIELD_TYPES.map((t) => `<option value="${t.value}" ${draft.type === t.value ? "selected" : ""}>${t.label}</option>`).join("")}</select>
+      ${btnHtml({ variant: "secondary", label: "Add", iconName: "plus", attrs: `onclick="App.addTemplateField('${type}')"` })}
+    </div>
+    <div class="row items-center gap-3 mt-4">
+      ${btnHtml({ variant: "primary", label: "Save template", iconName: "upload", attrs: `onclick="App.saveTemplate('${type}')"` })}
+      ${saved ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
+    </div>
+  </div>`;
+}
+
+/* ==================================================================== */
+/*  Report submission form                                               */
+/* ==================================================================== */
+
+let submitFormValues = {};
+let submitCustomFields = [];
+
+function toggleEventField(sel) { document.getElementById("submit-event-wrap").style.display = sel.value === "event" ? "block" : "none"; }
+
+function submitReportFormHtml(type) {
+  const template = App.templateForSubmit(type);
+  if (!template) return emptyState("upload", "Template not ready yet", `Your president hasn't set up a ${reportTypeLabel(type).toLowerCase()} template yet.`);
+  const done = App.submitState.done;
+  const editing = App.editingReportId;
+  const editingReport = editing ? App.org.reports.find((r) => r.id === editing) : null;
+  const frequency = editingReport ? editingReport.frequency : "weekly";
+  const eventName = editingReport ? editingReport.eventName : "";
+  const user = App.currentUser();
+  const isFinancial = type === "financial";
+  if (isFinancial && !editing) {
+    const openingField = template.fields.find((f) => /opening balance/i.test(f.label));
+    if (openingField && !submitFormValues[openingField.id] && user.termOpeningBalance) submitFormValues[openingField.id] = user.termOpeningBalance;
+  }
+  return `
+  ${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}
+  <form class="cra-card cra-card-accent p-5 space-y-4" onsubmit="return handleSubmitReport(event,'${type}')">
+    <div class="grid sm-grid-2">
+      ${fieldWrap("How often is this report?", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
+        <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option>
+        <option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option>
+        <option value="event" ${frequency === "event" ? "selected" : ""}>Whenever a programme is held</option>
+      </select>`)}
+      <div><label class="cra-label">Date recorded</label><div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">${todayDisplay()}</div></div>
+    </div>
+    <div id="submit-event-wrap" style="display:${frequency === "event" ? "block" : "none"}">
+      ${fieldWrap("Programme / event name", `<input id="submit-eventName" class="cra-input" placeholder="e.g. Diocesan Prayer Rally" value="${esc(eventName || "")}" />`)}
+    </div>
+    ${template.fields.map((f) => {
+      let input;
+      if (f.type === "textarea") input = `<textarea class="cra-textarea" rows="3" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea>`;
+      else input = `<input class="cra-input" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}" value="${esc(submitFormValues[f.id] || "")}" />`;
+      return fieldWrap(f.label, input);
+    }).join("")}
+    ${submitCustomFields.length ? `<div class="cra-label" style="color:var(--violet);padding-top:0.25rem">Your own questions</div>` : ""}
+    ${submitCustomFields.map((f) => `<div class="row items-start gap-2">
+        <div class="flex-1">${fieldWrap(f.label, `<textarea class="cra-textarea" rows="2" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea>`)}</div>
+        <button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" style="margin-top:1.4rem" onclick="removeCustomSubmitField('${f.id}')">${icon("trash", 13)}</button>
+      </div>`).join("")}
+    <div class="row gap-2 p-3" style="background:#f5f3ea;border-radius:8px">
+      <input id="custom-field-label" class="cra-input flex-1" placeholder="Add your own question…" />
+      ${btnHtml({ variant: "secondary", label: "Add question", iconName: "plus", attrs: `type="button" onclick="addCustomSubmitField()"` })}
+    </div>
+    <div class="row items-center gap-3" style="padding-top:0.5rem">
+      ${btnHtml({ variant: "primary", label: editing ? "Save changes" : "Submit report", iconName: "upload", attrs: `type="submit"` })}
+      ${done ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} ${editing ? "Saved" : "Submitted — the president can now review it"}</span>` : ""}
+    </div>
+  </form>`;
+}
+
+function addCustomSubmitField() {
+  const el = document.getElementById("custom-field-label");
+  const label = el.value.trim();
+  if (!label) return;
+  submitCustomFields.push({ id: uid(), label, type: "textarea" });
+  App.render();
+}
+function removeCustomSubmitField(id) { submitCustomFields = submitCustomFields.filter((f) => f.id !== id); App.render(); }
+
+function handleSubmitReport(e, type) {
+  e.preventDefault();
+  const template = App.templateForSubmit(type);
+  const frequency = document.getElementById("submit-frequency").value;
+  const eventNameEl = document.getElementById("submit-eventName");
+  const eventName = eventNameEl ? eventNameEl.value : "";
+  const values = {};
+  [...template.fields, ...submitCustomFields].forEach((f) => { const el = e.target.querySelector(`[name="${f.id}"]`); if (el) values[f.id] = el.value; });
+  const customFieldsCopy = submitCustomFields.map((f) => ({ ...f }));
+  App.submitReport(type, values, frequency, eventName, customFieldsCopy);
+  submitFormValues = {}; submitCustomFields = [];
+  return false;
+}
+
+/* ==================================================================== */
+/*  Reports list                                                          */
+/* ==================================================================== */
+
+function reportsTableHtml(reports, showLocal, allowEdit) {
+  if (reports.length === 0) return emptyState("file", "No reports submitted yet", "Once your executives submit reports, they'll be listed here for review and download.");
+  const user = App.currentUser();
+  return `<div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
+    <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)">
+      <th class="px-4 py-2 cra-label">Reg. No</th><th class="px-4 py-2 cra-label">Type</th>${showLocal ? `<th class="px-4 py-2 cra-label">Local</th>` : ""}
+      <th class="px-4 py-2 cra-label">Submitted by</th><th class="px-4 py-2 cra-label">Period</th><th class="px-4 py-2 cra-label">Date</th><th class="px-4 py-2 cra-label text-right">Action</th>
+    </tr></thead>
+    <tbody>${reports.slice().reverse().map((r) => `<tr class="cra-ledger-row">
+      <td class="px-4 py-3 cra-mono text-xs">${esc(r.regNo)}</td>
+      <td class="px-4 py-3">${badge(REPORT_TYPE_TONE[r.type], reportTypeLabel(r.type))}</td>
+      ${showLocal ? `<td class="px-4 py-3">${esc(r.localName || "—")}</td>` : ""}
+      <td class="px-4 py-3">${esc(r.submitterName)} <span style="color:var(--ink-soft)">· ${esc(r.position)}</span></td>
+      <td class="px-4 py-3">${esc(r.period || "—")}${r.editedAt ? ` <span class="text-xs" style="color:var(--ink-soft)">(edited)</span>` : ""}</td>
+      <td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${new Date(r.submittedAt).toLocaleDateString()}</td>
+      <td class="px-4 py-3 text-right"><button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.viewReport('${r.id}')">${icon("eye", 13)} View</button>${allowEdit && r.submittedBy === user.id ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.editReport('${r.id}')">${icon("upload", 13)} Edit</button>` : ""}</td>
+    </tr>`).join("")}</tbody>
+  </table></div></div>`;
+}
+
+/* ==================================================================== */
+/*  Structure tree                                                        */
+/* ==================================================================== */
+
+function executiveRowHtml(user) {
+  const initials = user.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
+  return `<div class="row items-center gap-3 py-2">
+    <div class="cra-seal" style="width:30px;height:30px;font-size:11px">${user.signatureDataUrl ? "" : initials}</div>
+    <div class="flex-1"><div class="text-sm font-medium">${esc(user.name)}</div><div class="text-xs" style="color:var(--ink-soft)">${esc(user.email)}</div></div>
+    ${badge(user.isAdmin ? "gold" : user.position === "President" ? "wine" : "violet", user.isAdmin ? "IT Admin" : user.position)}
+  </div>`;
+}
+
+function structureViewHtml(parish, local) {
+  const scopeLocals = local ? [local] : App.org.locals.filter((l) => l.parishId === parish.id);
+  let html = `<div class="space-y-5"><div class="cra-card cra-card-accent p-5">
+    <div class="row items-center gap-2 mb-3">${icon("landmark", 16)}<h3 class="cra-display text-lg">${esc(parish.name)}</h3>${badge("gold", parish.location)}</div>
+    <div class="divide-line">${App.org.users.filter((u) => u.level === "parish" && u.parishId === parish.id).map(executiveRowHtml).join("")}</div>
+  </div>`;
+  if (!local) {
+    html += `<div><div class="cra-label mb-2">Locals under this parish</div>`;
+    if (scopeLocals.length === 0) html += emptyState("building", "No locals registered yet", "Register your first local from the Locals page to let its executives join.");
+    else html += `<div class="space-y-4">${scopeLocals.map((l) => {
+      const execs = App.org.users.filter((u) => u.level === "local" && u.localId === l.id);
+      return `<div class="cra-card p-5"><div class="row items-center gap-2 mb-3">${icon("building", 15)}<h4 class="font-semibold">${esc(l.name)}</h4>${badge("gold", l.location)}${!l.presidentId ? badge("wine", "Awaiting president") : ""}</div><div class="divide-line">${execs.length === 0 ? `<p class="text-xs py-2" style="color:var(--ink-soft)">No executives registered yet.</p>` : execs.map(executiveRowHtml).join("")}</div></div>`;
+    }).join("")}</div>`;
+    html += `</div>`;
+  }
+  if (local) {
+    const execs = App.org.users.filter((u) => u.level === "local" && u.localId === local.id);
+    html += `<div class="cra-card p-5"><div class="row items-center gap-2 mb-3">${icon("building", 15)}<h4 class="font-semibold">${esc(local.name)}</h4>${badge("gold", local.location)}</div><div class="divide-line">${execs.map(executiveRowHtml).join("")}</div></div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+/* ==================================================================== */
+/*  Modals: new local, add member                                        */
+/* ==================================================================== */
+
+function newLocalModalHtml() {
+  return `<div class="modal-overlay" onmousedown="if(event.target===event.currentTarget) App.showNewLocal=false, App.render()">
+    <div class="cra-paper modal-box cra-fade-in max-w-md" style="border:1px solid var(--line)">
+      <div class="row items-center justify-between px-5 py-4" style="border-bottom:1px solid var(--line)"><h3 class="cra-display text-lg">Register a new local</h3><button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.showNewLocal=false; App.render()">${icon("x", 16)}</button></div>
+      <div class="p-5"><form class="space-y-4" onsubmit="return handleNewLocalSubmit(event)">
+        ${fieldWrap("Local name", `<input id="newlocal-name" class="cra-input" required placeholder="e.g. St. Anthony Local" />`)}
+        ${fieldWrap("Location", `<input id="newlocal-location" class="cra-input" required placeholder="Area / suburb" />`)}
+        <p class="text-xs" style="color:var(--ink-soft)">Once registered, this local's executives can select it during registration.</p>
+        ${btnHtml({ variant: "primary", label: "Register local", iconName: "plus", extraClass: "w-full", attrs: `type="submit"` })}
+      </form></div>
+    </div>
+  </div>`;
+}
+function handleNewLocalSubmit(e) { e.preventDefault(); App.createLocal(document.getElementById("newlocal-name").value, document.getElementById("newlocal-location").value); return false; }
+
+function addMemberModalHtml() {
+  const d = App.addMemberDraft;
+  const locals = App.org.locals.filter((l) => l.parishId === App.currentUser().parishId);
+  const posOptions = App.memberAvailablePositions();
+  return `<div class="modal-overlay" onmousedown="if(event.target===event.currentTarget) App.showAddMember=false, App.render()">
+    <div class="cra-paper modal-box cra-fade-in max-w-md" style="border:1px solid var(--line)">
+      <div class="row items-center justify-between px-5 py-4" style="border-bottom:1px solid var(--line)"><h3 class="cra-display text-lg">Add a member</h3><button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.showAddMember=false; App.render()">${icon("x", 16)}</button></div>
+      <div class="p-5"><form class="space-y-4" onsubmit="return handleAddMemberSubmit(event)">
+        ${fieldWrap("Level", `<select class="cra-select" onchange="App.addMemberDraft.level=this.value; App.addMemberDraft.localId=''; App.addMemberDraft.position=''; App.render()">
+          <option value="local" ${d.level === "local" ? "selected" : ""}>Local executive</option>
+          <option value="parish" ${d.level === "parish" ? "selected" : ""}>Parish executive</option>
+        </select>`)}
+        ${d.level === "local" ? fieldWrap("Local", `<select class="cra-select" onchange="App.addMemberDraft.localId=this.value; App.addMemberDraft.position=''; App.render()"><option value="">Select local…</option>${locals.map((l) => `<option value="${l.id}" ${d.localId === l.id ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select>`) : ""}
+        ${(d.level === "parish" || d.localId) ? fieldWrap("Position", `<select class="cra-select" onchange="App.addMemberDraft.position=this.value"><option value="">Select position…</option>${posOptions.map((p) => `<option value="${p}" ${d.position === p ? "selected" : ""}>${p}</option>`).join("")}</select>`) : ""}
+        ${fieldWrap("Full name", `<input id="addmember-name" class="cra-input" required />`)}
+        ${fieldWrap("Email", `<input id="addmember-email" class="cra-input" type="email" required />`)}
+        ${fieldWrap("Temporary password", `<input id="addmember-password" class="cra-input" type="text" required minlength="6" placeholder="They can log in with this" />`)}
+        ${btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", extraClass: "w-full", attrs: `type="submit"` })}
+      </form></div>
+    </div>
+  </div>`;
+}
+function handleAddMemberSubmit(e) {
+  e.preventDefault();
+  App.addMemberDraft.name = document.getElementById("addmember-name").value;
+  App.addMemberDraft.email = document.getElementById("addmember-email").value;
+  App.addMemberDraft.password = document.getElementById("addmember-password").value;
+  App.addMember(); return false;
+}
+
+/* ==================================================================== */
+/*  Overview panel                                                        */
+/* ==================================================================== */
+
+function statCard(iconName, label, value) {
+  return `<div class="cra-card p-4 row items-center gap-3"><div class="cra-seal" style="width:38px;height:38px">${icon(iconName, 16)}</div><div><div class="cra-display text-xl leading-none">${esc(value)}</div><div class="text-xs mt-1" style="color:var(--ink-soft)">${esc(label)}</div></div></div>`;
+}
+
+function overviewPanelHtml(ctx) {
+  const { user, parish, local, myLocals, myOwnReports, myLocalReports, mySubmissions, reportTypes, isPresident, isAdmin } = ctx;
+  const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 17 ? "Good afternoon" : "Good evening";
+
+  let stats = "";
+  if (isAdmin) stats += statCard("users", "Registered members", App.org.users.length);
+  if (user.level === "parish" && isPresident) stats += statCard("building", "Locals registered", myLocals.length);
+  if (isPresident) stats += statCard("file", user.level === "parish" ? "Reports from locals" : "Reports received", user.level === "parish" ? myLocalReports.length : myOwnReports.length);
+  if (reportTypes.length) stats += statCard("scroll", "My submissions", mySubmissions.length);
+  stats += statCard("users", "Your rank", user.isAdmin ? "IT Admin" : user.position);
+
+  let cards = "";
+  if (isAdmin) {
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('members')">${icon("users", 18, "")}<div class="font-semibold mb-1 mt-2">Manage members</div><p class="text-sm" style="color:var(--ink-soft)">Add or remove executives across the parish and its locals.</p></button>`;
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('template')">${icon("upload", 18, "")}<div class="font-semibold mb-1 mt-2">Amend templates</div><p class="text-sm" style="color:var(--ink-soft)">Edit report templates for the parish or any local.</p></button>`;
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('parishsettings')">${icon("cog", 18, "")}<div class="font-semibold mb-1 mt-2">Parish settings</div><p class="text-sm" style="color:var(--ink-soft)">Update the parish's name and logo.</p></button>`;
+  }
+  if (isPresident && user.level === "parish") cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('locals')">${icon("userPlus", 18, "")}<div class="font-semibold mb-1 mt-2">Register a local</div><p class="text-sm" style="color:var(--ink-soft)">Add a local so its executives can register underneath your parish.</p></button>`;
+  if (isPresident) {
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('template')">${icon("upload", 18, "")}<div class="font-semibold mb-1 mt-2">Set up report templates</div><p class="text-sm" style="color:var(--ink-soft)">Lay out the fields your secretary and treasurer will fill in.</p></button>`;
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('reports')">${icon("eye", 18, "")}<div class="font-semibold mb-1 mt-2">Review submitted reports</div><p class="text-sm" style="color:var(--ink-soft)">Read and download a filled PDF, ready to print.</p></button>`;
+  }
+  reportTypes.forEach((type) => {
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.goSubmit('${type}')">${icon(REPORT_TYPE_ICON[type], 18, "")}<div class="font-semibold mb-1 mt-2">Submit ${reportTypeLabel(type).toLowerCase()}</div><p class="text-sm" style="color:var(--ink-soft)">Weekly, monthly, or whenever a programme is held.</p></button>`;
+  });
+  cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('structure')">${icon("users", 18, "")}<div class="font-semibold mb-1 mt-2">View the structure</div><p class="text-sm" style="color:var(--ink-soft)">See how ${user.level === "parish" ? "your parish and its locals" : "your local"} are organised.</p></button>`;
+  cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('profile')">${icon("pen", 18, "")}<div class="font-semibold mb-1 mt-2">My profile &amp; signature</div><p class="text-sm" style="color:var(--ink-soft)">Upload your signature for reports and PDFs.</p></button>`;
+
+  return `${pageHeader(todayDisplay(), `${greeting}, ${user.name.split(" ")[0]}`, `${user.isAdmin ? "IT Admin" : user.position} · ${parish ? parish.name : ""}${local ? ` · ${local.name}` : ""}`)}
+  <div class="grid grid-4 sm-grid-4 mb-8">${stats}</div>
+  <div class="grid sm-grid-2">${cards}</div>`;
+}
+
+/* ==================================================================== */
+/*  Members / Parish settings / Profile views                            */
+/* ==================================================================== */
+
+function membersViewHtml() {
+  const admin = App.currentUser();
+  const members = App.org.users.filter((u) => u.parishId === admin.parishId);
+  return `${pageHeader("IT Admin", "Members", "Everyone registered under this parish and its locals.", btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", attrs: `onclick="App.showAddMember=true; App.addMemberDraft={level:'local',localId:'',position:'',name:'',email:'',password:''}; App.render()"` }))}
+  <div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
+    <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Name</th><th class="px-4 py-2 cra-label">Email</th><th class="px-4 py-2 cra-label">Scope</th><th class="px-4 py-2 cra-label">Position</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
+    <tbody>${members.map((u) => {
+      const local = u.localId ? App.org.locals.find((l) => l.id === u.localId) : null;
+      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(u.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(u.email)}</td><td class="px-4 py-3">${local ? esc(local.name) : "Parish"}</td><td class="px-4 py-3">${badge(u.isAdmin ? "gold" : "violet", u.isAdmin ? "IT Admin" : u.position)}</td><td class="px-4 py-3 text-right"><div class="row gap-2 justify-end">${btnHtml({ variant: "ghost", label: "Reset password", iconName: "lock", size: 12, attrs: `onclick="App.sendMemberResetEmail('${u.id}')"` })}${u.id === admin.id ? `<span class="text-xs" style="color:var(--ink-soft)">You</span>` : btnHtml({ variant: "danger", label: "Remove", iconName: "trash", size: 12, attrs: `onclick="if(confirm('Remove ${esc(u.name)}?')) App.removeMember('${u.id}')"` })}</div></td></tr>`;
+    }).join("")}</tbody>
+  </table></div></div>`;
+}
+
+function parishSettingsViewHtml() {
+  const admin = App.currentUser();
+  const parish = App.org.parishes.find((p) => p.id === admin.parishId);
+  return `${pageHeader("IT Admin", "Parish settings", "Update the parish's name, location and logo — this appears on every report and PDF.")}
+  <div class="cra-card cra-card-accent p-5 max-w-md">
+    <div class="row items-center gap-3 mb-5">
+      <div class="cra-seal" style="width:56px;height:56px">${parish.logoDataUrl ? `<img src="${parish.logoDataUrl}" />` : icon("landmark", 22)}</div>
+      <label class="cra-btn cra-btn-ghost relative" style="cursor:pointer">${icon("upload", 13)} Upload logo<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadParishLogo(this.files[0])" /></label>
+    </div>
+    <form class="space-y-4" onsubmit="return handleParishSettingsSubmit(event)">
+      ${fieldWrap("Parish name", `<input id="parish-name" class="cra-input" required value="${esc(parish.name)}" />`)}
+      ${fieldWrap("Location", `<input id="parish-location" class="cra-input" value="${esc(parish.location || "")}" />`)}
+      ${btnHtml({ variant: "primary", label: "Save changes", iconName: "check", attrs: `type="submit"` })}
+    </form>
+  </div>`;
+}
+function handleParishSettingsSubmit(e) { e.preventDefault(); App.saveParishSettings(document.getElementById("parish-name").value, document.getElementById("parish-location").value); return false; }
+
+function profileViewHtml() {
+  const user = App.currentUser();
+  const isFinancial = user.position === "Financial Secretary" || user.position === "Treasurer";
+  return `${pageHeader("Account", "My profile", "Your signature appears on reports you submit and on the president's downloaded PDFs.")}
+  <div class="cra-card cra-card-accent p-5 max-w-md space-y-5">
+    <div><div class="cra-label mb-1">Name</div><div class="text-sm font-medium">${esc(user.name)}</div></div>
+    <div><div class="cra-label mb-1">Email</div><div class="text-sm">${esc(user.email)}</div></div>
+    <div>
+      <div class="cra-label mb-2">Signature</div>
+      ${user.signatureDataUrl ? `<img class="sig-thumb mb-2" src="${user.signatureDataUrl}" />` : `<p class="text-xs mb-2" style="color:var(--ink-soft)">No signature uploaded yet.</p>`}
+      <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("pen", 13)} ${user.signatureDataUrl ? "Replace signature" : "Upload signature"}<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadSignature(this.files[0])" /></label>
+    </div>
+    ${isFinancial ? `<form onsubmit="return handleTermBalanceSubmit(event)" class="space-y-2">
+      ${fieldWrap("Opening balance at start of term (GHS)", `<input id="term-balance" class="cra-input" type="number" value="${esc(user.termOpeningBalance || "")}" placeholder="Amount you started your term with" />`)}
+      <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report.</p>
+      ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
+    </form>` : ""}
+  </div>`;
+}
+function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
+
+/* ==================================================================== */
+/*  App shell                                                              */
+/* ==================================================================== */
+
+function renderApp() {
+  const user = App.currentUser();
+  if (!user) { App.screen = "landing"; return renderLanding(); }
+  const org = App.org;
+  const parish = org.parishes.find((p) => p.id === user.parishId);
+  const local = user.localId ? org.locals.find((l) => l.id === user.localId) : null;
+  const isPresident = user.position === "President";
+  const isAdmin = !!user.isAdmin;
+  const reportTypes = reportTypesForPosition(user.position);
+  const { level: scopeLevel, id: scopeId } = App.scopeFor(user);
+
+  const myLocals = user.level === "parish" ? org.locals.filter((l) => l.parishId === user.parishId) : [];
+  const myOwnReports = org.reports.filter((r) => r.ownerLevel === scopeLevel && r.ownerId === scopeId);
+  const myLocalReports = user.level === "parish" ? org.reports.filter((r) => r.ownerLevel === "local" && myLocals.map((l) => l.id).includes(r.ownerId)).map((r) => ({ ...r, localName: (myLocals.find((l) => l.id === r.ownerId) || {}).name })) : [];
+  const mySubmissions = org.reports.filter((r) => r.submittedBy === user.id);
+
+  const nav = [{ id: "overview", label: "Overview", iconName: "home" }];
+  if (isAdmin) { nav.push({ id: "members", label: "Members", iconName: "users" }); }
+  if ((user.level === "parish" && isPresident) || isAdmin) nav.push({ id: "locals", label: "Locals", iconName: "building" });
+  if (isPresident || isAdmin) {
+    nav.push({ id: "template", label: "Report templates", iconName: "upload" });
+    if (!isAdmin) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
+  }
+  if (isAdmin) nav.push({ id: "reports", label: "All reports", iconName: "file" });
+  reportTypes.forEach((type) => nav.push({ id: `submit:${type}`, label: `Submit ${reportTypeLabel(type).split(" ")[0].toLowerCase()}`, iconName: REPORT_TYPE_ICON[type] }));
+  if (reportTypes.length) nav.push({ id: "submissions", label: "My submissions", iconName: "scroll" });
+  if (isAdmin) nav.push({ id: "parishsettings", label: "Parish settings", iconName: "cog" });
+  nav.push({ id: "structure", label: "Structure", iconName: "users" });
+  nav.push({ id: "profile", label: "My profile", iconName: "pen" });
+
+  const initials = user.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
+  const activeNavId = App.view === "submit" ? `submit:${App.submitType}` : App.view;
+
+  let content = "";
+  if (App.view === "overview") {
+    content = overviewPanelHtml({ user, parish, local, myLocals, myOwnReports, myLocalReports, mySubmissions, reportTypes, isPresident, isAdmin });
+  } else if (App.view === "members" && isAdmin) {
+    content = membersViewHtml();
+  } else if (App.view === "parishsettings" && isAdmin) {
+    content = parishSettingsViewHtml();
+  } else if (App.view === "profile") {
+    content = profileViewHtml();
+  } else if (App.view === "locals" && (isAdmin || (isPresident && user.level === "parish"))) {
+    content = pageHeader("Hierarchy", "Locals under your parish", "Register a local before its executives can join.", btnHtml({ variant: "primary", label: "Register local", iconName: "plus", attrs: `onclick="App.showNewLocal=true; App.render()"` }));
+    const parishLocals = org.locals.filter((l) => l.parishId === (isAdmin ? user.parishId : user.parishId));
+    if (parishLocals.length === 0) content += emptyState("building", "No locals yet", "Register your first local so its secretary, treasurer and president can register under it.", btnHtml({ variant: "primary", label: "Register local", iconName: "plus", attrs: `onclick="App.showNewLocal=true; App.render()"` }));
+    else content += `<div class="grid sm-grid-2">${parishLocals.map((l) => {
+      const execCount = org.users.filter((u) => u.localId === l.id).length;
+      const reportCount = org.reports.filter((r) => r.ownerId === l.id).length;
+      return `<div class="cra-card p-4"><div class="row items-center gap-2 mb-2">${icon("building", 15)}<span class="font-semibold">${esc(l.name)}</span></div><div class="text-xs mb-3" style="color:var(--ink-soft)">${esc(l.location)}</div><div class="row gap-2">${badge("violet", `${execCount} executive${execCount !== 1 ? "s" : ""}`)}${badge("green", `${reportCount} report${reportCount !== 1 ? "s" : ""}`)}${!l.presidentId ? badge("wine", "No president yet") : ""}</div></div>`;
+    }).join("")}</div>`;
+  } else if (App.view === "template" && (isPresident || isAdmin)) {
+    content = pageHeader("Report layout", "Report templates", "Lay out the fields your secretary and financial secretary/treasurer will fill in.");
+    if (isAdmin) {
+      const scope = App.adminTemplateScope || App.scopeFor(user);
+      content += `<div class="row wrap gap-2 mb-5">
+        <button class="cra-btn ${scope.level === "parish" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminTemplateScope('parish','${user.parishId}')">Parish executives</button>
+        ${org.locals.filter((l) => l.parishId === user.parishId).map((l) => `<button class="cra-btn ${scope.level === "local" && scope.id === l.id ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminTemplateScope('local','${l.id}')">${esc(l.name)}</button>`).join("")}
+      </div>`;
+    }
+    content += `<div class="space-y-5">${templateEditorHtml("program")}${templateEditorHtml("financial")}${templateEditorHtml("survey")}</div>`;
+  } else if (App.view === "reports" && isAdmin) {
+    const allReports = org.reports.map((r) => { const l = org.locals.find((x) => x.id === r.ownerId); return { ...r, localName: l ? l.name : null }; });
+    content = pageHeader("Read only", "All reports", "Every report submitted across the parish and its locals.");
+    content += reportsTableHtml(allReports, true);
+  } else if (App.view === "reports" && isPresident && user.level === "local") {
+    content = pageHeader("Read only", "Reports submitted to you", "You can review and download these as a filled PDF.");
+    content += reportsTableHtml(myOwnReports, false);
+  } else if (App.view === "reports" && isPresident && user.level === "parish") {
+    if (!App._parishReportsTab) App._parishReportsTab = "locals";
+    content = pageHeader("Read only", "All reports", "Reports roll up from every local you've registered, plus your own parish executives.");
+    content += `<div class="row gap-2 mb-5">
+      <button class="cra-btn ${App._parishReportsTab === "locals" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App._parishReportsTab='locals'; App.render()">Local reports (${myLocalReports.length})</button>
+      <button class="cra-btn ${App._parishReportsTab === "own" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App._parishReportsTab='own'; App.render()">Parish reports (${myOwnReports.length})</button>
+    </div>`;
+    content += reportsTableHtml(App._parishReportsTab === "locals" ? myLocalReports : myOwnReports, App._parishReportsTab === "locals");
+  } else if (App.view === "submit" && reportTypes.includes(App.submitType)) {
+    content = pageHeader(user.level === "parish" ? "Parish report" : "Local report", `Submit ${reportTypeLabel(App.submitType).toLowerCase()}`, "Fill in the fields your president laid out, or add your own questions. Submitting builds the finished report automatically.");
+    content += submitReportFormHtml(App.submitType);
+  } else if (App.view === "submissions" && reportTypes.length) {
+    content = pageHeader("History", "My submissions", "Everything you've filed, in order. You can still open and edit an answer after submitting.");
+    content += reportsTableHtml(mySubmissions, false, true);
+  } else if (App.view === "structure" && parish) {
+    content = pageHeader("Hierarchy", user.level === "parish" || isAdmin ? "Parish structure" : "Local structure", "Every registered executive, arranged by rank.");
+    content += structureViewHtml(parish, user.level === "local" ? local : null);
+  } else {
+    content = overviewPanelHtml({ user, parish, local, myLocals, myOwnReports, myLocalReports, mySubmissions, reportTypes, isPresident, isAdmin });
+  }
+
+  const viewingReport = App.viewingReportId ? org.reports.find((r) => r.id === App.viewingReportId) : null;
+
+  return `<div id="app-shell">
+    <aside id="sidebar" class="cra-sidebar col md-static ${App.sidebarOpen ? "open" : ""}">
+      <div class="px-5 py-5 row items-center gap-2" style="border-bottom:1px solid rgba(255,255,255,0.1)">
+        <div class="cra-seal" style="width:34px;height:34px;border-color:var(--gold)">${parish && parish.logoDataUrl ? `<img src="${parish.logoDataUrl}" />` : icon("church", 14)}</div>
+        <div><div class="cra-display text-sm" style="color:#fff;line-height:1.2">${esc(parish ? parish.name : "Parish Register")}</div>${local ? `<div class="text-xs" style="color:#c9c3e6;line-height:1.2">${esc(local.name)}</div>` : ""}</div>
+      </div>
+      <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto cra-scrollbar">
+        ${nav.map((n) => `<button class="cra-nav-item ${activeNavId === n.id ? "active" : ""}" onclick="${n.id.startsWith("submit:") ? `App.goSubmit('${n.id.split(":")[1]}')` : `App.setView('${n.id}')`}">${icon(n.iconName, 16)} ${n.label}</button>`).join("")}
+      </nav>
+      <div class="px-4 py-4" style="border-top:1px solid rgba(255,255,255,0.1)">
+        <div class="row items-center gap-2 mb-3">
+          <div class="cra-seal" style="width:30px;height:30px;font-size:11px;border-color:var(--gold)">${initials}</div>
+          <div class="flex-1" style="min-width:0"><div class="text-xs font-medium truncate" style="color:#fff">${esc(user.name)}</div><div class="text-xs truncate" style="color:#c9c3e6">${esc(isAdmin ? "IT Admin" : user.position)} · ${user.level === "parish" ? "Parish" : user.level === "local" ? "Local" : "Admin"}</div></div>
+        </div>
+        <button class="cra-nav-item w-full" onclick="App.doLogout()">${icon("logout", 15)} Log out</button>
+      </div>
+    </aside>
+    ${App.sidebarOpen ? `<div id="sidebar-overlay" onclick="App.toggleSidebar(false)"></div>` : ""}
+    <main id="main-area">
+      <div class="md-hidden row items-center justify-between px-4 py-3 cra-paper" style="border-bottom:1px solid var(--line)">
+        <button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.toggleSidebar(true)">${icon("menu", 18)}</button>
+        <span class="cra-display text-sm">${esc(parish ? parish.name : "")}</span>
+        <div style="width:34px"></div>
+      </div>
+      <div class="p-5 max-w-5xl mx-auto cra-fade-in" style="padding:1.5rem">${content}</div>
+    </main>
+  </div>
+  ${viewingReport ? reportViewModalHtml(viewingReport) : ""}
+  ${App.showNewLocal ? newLocalModalHtml() : ""}
+  ${App.showAddMember ? addMemberModalHtml() : ""}`;
+}
+
+/* ==================================================================== */
+/*  Root render                                                          */
+/* ==================================================================== */
+
+function render() {
+  const root = document.getElementById("app");
+  if (App.screen === "loading" || !App.org) {
+    root.innerHTML = `<div class="col items-center" style="min-height:100vh;justify-content:center;background:var(--bg)"><div class="col items-center gap-3">${icon("loader", 26, "cra-spin")}<span class="text-sm" style="color:var(--ink-soft)">Opening the register&hellip;</span></div></div>`;
+    return;
+  }
+  if (App.screen === "landing") root.innerHTML = renderLanding();
+  else if (App.screen === "login") root.innerHTML = renderLogin();
+  else if (App.screen === "register") root.innerHTML = renderRegister();
+  else if (App.screen === "app") root.innerHTML = renderApp();
+}
+
+App.init();
+</script>
+</body>
+</html>
