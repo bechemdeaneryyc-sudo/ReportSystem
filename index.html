@@ -421,20 +421,63 @@ function icon(name, size = 16, extra = "") {
 /*  Default templates, seeded from the parish's own report formats       */
 /* ==================================================================== */
 
+// Built straight from the actual GODYC Secretariat Report Template (.docx) the
+// Secretary's team already uses — every question in it, in order, so a brand-new
+// parish/local gets a working, correct submission form immediately, with no one
+// needing to upload the .docx by hand first.
 function defaultProgramFields() {
-  return [
-    { id: uid(), label: "Membership (councils, groups involved)", type: "textarea" },
-    { id: uid(), label: "Name/title of programmes & activities", type: "textarea" },
-    { id: uid(), label: "Focus or theme for each programme", type: "textarea" },
-    { id: uid(), label: "Number of participants", type: "text" },
-    { id: uid(), label: "Resource persons", type: "textarea" },
-    { id: uid(), label: "Level of programme (Parish / Deanery / Diocesan)", type: "text" },
-    { id: uid(), label: "Outcome / impact", type: "textarea" },
-    { id: uid(), label: "Meetings held (dates, venue, key outcomes)", type: "textarea" },
-    { id: uid(), label: "Challenges faced", type: "textarea" },
-    { id: uid(), label: "Way forward / future plans", type: "textarea" },
-    { id: uid(), label: "Other matters (e.g. obituaries, special notices)", type: "textarea" },
+  const meetingRow = (role) => [
+    { id: `godyc_meet_${role.key}_date`, label: `${role.label} — Date`, type: "date" },
+    { id: `godyc_meet_${role.key}_venue`, label: `${role.label} — Venue`, type: "text" },
+    { id: `godyc_meet_${role.key}_outcomes`, label: `${role.label} — Key Outcomes/Decisions`, type: "textarea" },
   ];
+  const rosterRow = (role) => [
+    { id: `godyc_roster_${role}_name`, label: `${role} — Name`, type: "text" },
+    { id: `godyc_roster_${role}_phone`, label: `${role} — Phone`, type: "text" },
+  ];
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return [
+    { id: "godyc_theme", label: "Theme", type: "text" },
+    { id: "godyc_period", label: "Period of the Report", type: "text" },
+    { id: "godyc_membership", label: "Membership", type: "textarea", help: "Councils, groups, and movements represented." },
+    ...ROSTER_ROLES_DISPLAY.flatMap((role) => rosterRow(role)),
+    { id: "godyc_prog_names", label: "Name/Title of Programmes", type: "textarea", help: "One per line if there were several." },
+    { id: "godyc_prog_focus", label: "Focus/Theme for Programme", type: "textarea" },
+    { id: "godyc_prog_participants", label: "No. of Participants", type: "number" },
+    { id: "godyc_prog_resource", label: "Resource Persons", type: "textarea" },
+    { id: "godyc_prog_structure", label: "Structure of Programme", type: "text", help: "Was it at the Arch/Diocesan/Vicariate, Deanery, or Parish level?" },
+    { id: "godyc_prog_outcome", label: "Outcome / Impact", type: "textarea" },
+    { id: "godyc_prog_challenges", label: "Challenges faced during activities", type: "textarea" },
+    { id: "godyc_prog_wayforward", label: "Way Forward/Future Plans", type: "textarea" },
+    { id: "godyc_prog_major_next", label: "Major Activities for Ensuing Year", type: "textarea", help: "New initiatives / innovations planned." },
+    { id: "godyc_laudato_trees", label: "Special Projects — Tree Planting", type: "textarea", help: "Laudato Si Programme." },
+    { id: "godyc_laudato_trees_count", label: "No. of Trees Planted", type: "number" },
+    { id: "godyc_laudato_waste", label: "Special Projects — Waste Management", type: "textarea", help: "Laudato Si Programme." },
+    { id: "godyc_laudato_waste_count", label: "No. of Plastic Waste Baskets placed in parishes", type: "number" },
+    { id: "godyc_collab", label: "Collaborations/Affiliated Partnership Programmes", type: "textarea", help: "E.g. National Youth Authority, SELL, Sahel Peace Initiative, etc." },
+    { id: "godyc_recommendation", label: "Recommendation", type: "textarea" },
+    ...[
+      { key: slug("Provincial Study Session"), label: "Provincial Study Session" },
+      { key: slug("Arch/Diocesan/Vicariate Youth Council/Movements Meetings"), label: "Arch/Diocesan/Vicariate Youth Council/Movements Meetings" },
+      { key: slug("Executive/Secretariat Meetings"), label: "Executive/Secretariat Meetings" },
+      { key: slug("GHANCYC Meetings/Programmes Attended"), label: "GHANCYC Meetings/Programmes Attended" },
+      { key: slug("Arch/Diocese/Vicariate Laity Activities Participated"), label: "Arch/Diocese/Vicariate Laity Activities Participated" },
+      { key: slug("Visitation"), label: "Visitation" },
+      { key: slug("Others"), label: "Other Meetings" },
+    ].flatMap(meetingRow),
+    { id: "godyc_challenges_problems", label: "Challenges/Problems", type: "textarea" },
+    { id: "godyc_projections", label: "Projections/Future Plans", type: "textarea", help: "Long-term plans of the Diocese." },
+    { id: "godyc_others_obituary", label: "Obituary / Other Notices", type: "textarea" },
+    { id: "godyc_accounts_income", label: "Income (GHS)", type: "number" },
+    { id: "godyc_accounts_expenditure", label: "Expenditure (GHS)", type: "number" },
+    { id: "godyc_accounts_balance", label: "Balance (GHS)", type: "number" },
+  ];
+}
+// A synthetic (unsaved) template built from the fields above, used only as a
+// fallback so the Secretary's report works immediately without anyone needing to
+// upload the .docx — becomes a real, persisted template the moment it's saved.
+function builtinProgramTemplate(level, id) {
+  return { id: null, ownerLevel: level, ownerId: id, type: "program", fields: defaultProgramFields(), docHtml: null, docFileName: "GODYC_Secretariat_Report_Template.docx", updatedAt: null, inherited: false, builtIn: true };
 }
 function defaultFinancialFields() {
   return [
@@ -707,11 +750,17 @@ const App = {
 
   templateFor(type, scopeOverride) {
     const { level, id } = scopeOverride || this.activeTemplateScope();
-    return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+    const found = this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+    if (found) return found;
+    if (type === "program") return builtinProgramTemplate(level, id);
+    return null;
   },
   templateForSubmit(type) {
     const { level, id } = this.scopeFor(this.currentUser());
-    return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+    const found = this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
+    if (found) return found;
+    if (type === "program") return builtinProgramTemplate(level, id);
+    return null;
   },
 
   // The financial secretary/treasurer's own chain of financial reports, oldest first,
@@ -1535,12 +1584,14 @@ function templateEditorHtml(type) {
   const flash = App.templateUploadFlash && App.templateUploadFlash.type === type ? App.templateUploadFlash : null;
   const savedTemplate = App.templateFor(type);
   const isInherited = !!(savedTemplate && savedTemplate.inherited === true);
+  const isBuiltin = !!(savedTemplate && savedTemplate.builtIn === true);
   return `<div class="cra-card cra-card-accent p-5">
     <div class="row items-center justify-between mb-4">
       <div class="row items-center gap-2">${icon(REPORT_TYPE_ICON[type], 16, "")}<h3 class="cra-display text-lg">${reportTypeLabel(type)} template</h3></div>
-      <div class="row items-center gap-2">${isInherited ? badge("gold", "From parish", "landmark") : ""}${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}</div>
+      <div class="row items-center gap-2">${isInherited ? badge("gold", "From parish", "landmark") : ""}${isBuiltin ? badge("violet", "Built-in GODYC template", "file") : ""}${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}</div>
     </div>
     ${isInherited ? `<p class="text-xs mb-3" style="color:var(--ink-soft)">This layout was set by your parish president and applies here automatically. Editing and saving makes it this local's own — future parish updates won't overwrite it.</p>` : ""}
+    ${isBuiltin ? `<p class="text-xs mb-3" style="color:var(--ink-soft)">This is the standard GODYC Secretariat Report questions, built in so the Secretary can submit right away — no upload needed. Edit anything below and click Save to make your own version, or upload a different .docx to replace it entirely.</p>` : ""}
     <div class="p-3 mb-4" style="background:#f5f3ea;border-radius:8px;border:1px dashed var(--gold)">
       <div class="cra-label mb-2" style="color:var(--violet)">Upload a Word (.docx) template</div>
       <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Section headings and table headers are skipped automatically, and ${type === "financial" ? "only Part B (Financial Secretary/Treasurer)" : "only Part A (Secretary)"} questions are pulled in; the layout is reused when building the filled-in PDF.</p>
