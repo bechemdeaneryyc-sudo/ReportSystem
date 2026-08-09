@@ -534,6 +534,7 @@ const App = {
   templateSavedFlash: null,
   templateUploadFlash: null,
   adminTemplateScope: null,
+  adminRosterScope: null,
   submitState: { done: false },
   submitType: null,
   editingReportId: null,
@@ -688,6 +689,21 @@ const App = {
     if (user.isAdmin && this.adminTemplateScope) return this.adminTemplateScope;
     return this.scopeFor(user);
   },
+  activeRosterScope() {
+    const user = this.currentUser();
+    return this.adminRosterScope || { level: "parish", id: user.parishId };
+  },
+  setAdminRosterScope(level, id) { this.adminRosterScope = { level, id }; this.render(); },
+  // Only the IT admin sets the executive-committee roster (name/phone per role) now — it
+  // lives on the parish or local record itself rather than any one person's account, so it
+  // survives a change of secretary and can't be edited by the executives it describes.
+  async saveRoster(level, id, roster) {
+    await this.updateOrg((o) => {
+      if (level === "parish") { const p = o.parishes.find((x) => x.id === id); if (p) p.executiveRoster = roster; }
+      else { const l = o.locals.find((x) => x.id === id); if (l) l.executiveRoster = roster; }
+      return o;
+    });
+  },
 
   templateFor(type, scopeOverride) {
     const { level, id } = scopeOverride || this.activeTemplateScope();
@@ -709,15 +725,13 @@ const App = {
   // True once this financial secretary/treasurer has at least one report on record —
   // after that their term opening balance is locked and only auto-updates from then on.
   hasFinancialHistory(user) { return this.myFinancialReports(user).length > 0; },
-  // True once this person has submitted any report at all — used to lock their
-  // one-time term data (executive roster, opening balance) once their term has begun.
-  hasReportHistory(user) { return this.org.reports.some((r) => r.submittedBy === user.id); },
-  // The executive-committee roster (name/phone per role) set by the Secretary for
-  // this reporting scope, used to auto-fill matching fields on every report.
+  // The executive-committee roster (name/phone per role) the IT admin set for this
+  // reporting scope (parish or local), used to auto-fill matching fields on every report.
   getRosterForScope(user) {
     const { level, id } = this.scopeFor(user);
-    const secretary = this.org.users.find((u) => u.level === level && (level === "parish" ? u.parishId === id : u.localId === id) && u.position === "Secretary");
-    return (secretary && secretary.executiveRoster) || {};
+    if (level === "parish") { const p = this.org.parishes.find((x) => x.id === id); return (p && p.executiveRoster) || {}; }
+    const l = this.org.locals.find((x) => x.id === id);
+    return (l && l.executiveRoster) || {};
   },
   // Computes the opening balance that should be carried into a report: the closing
   // balance of the report immediately before it in this person's own chain, or their
@@ -773,9 +787,29 @@ const App = {
     const doc = this.templateDraftDoc[type];
     await this.updateOrg((o) => {
       const idx = o.templates.findIndex((t) => t.ownerLevel === level && t.ownerId === id && t.type === type);
-      const patch = { fields, docHtml: doc ? doc.html : null, docFileName: doc ? doc.fileName : null, updatedAt: Date.now() };
+      const patch = { fields, docHtml: doc ? doc.html : null, docFileName: doc ? doc.fileName : null, updatedAt: Date.now(), inherited: false };
       if (idx >= 0) Object.assign(o.templates[idx], patch);
       else o.templates.push({ id: uid(), ownerLevel: level, ownerId: id, type, ...patch });
+
+      // A parish-level template is the layout for that parish's own executives.
+      // Push the same layout down to every local registered under this parish so
+      // their secretary/financial secretary/treasurer can submit against it right
+      // away — unless that local already has its own customized template, in
+      // which case we leave it alone. Locals that only ever received the
+      // cascaded copy (never edited it themselves) get updated automatically
+      // whenever the parish president re-saves.
+      if (level === "parish") {
+        const locals = o.locals.filter((l) => l.parishId === id);
+        locals.forEach((l) => {
+          const lidx = o.templates.findIndex((t) => t.ownerLevel === "local" && t.ownerId === l.id && t.type === type);
+          const lpatch = { fields, docHtml: doc ? doc.html : null, docFileName: doc ? doc.fileName : null, updatedAt: Date.now(), inherited: true };
+          if (lidx >= 0) {
+            if (o.templates[lidx].inherited === true) Object.assign(o.templates[lidx], lpatch);
+          } else {
+            o.templates.push({ id: uid(), ownerLevel: "local", ownerId: l.id, type, ...lpatch });
+          }
+        });
+      }
       return o;
     });
     this.templateSavedFlash = type; this.templateUploadFlash = null; this.render();
@@ -1387,9 +1421,8 @@ async function downloadReportPdf(reportId) {
 // A synthetic "report" built straight from a template, with no answers filled in —
 // used to produce a printable blank form (question structure + empty fields) for
 // cases where the secretary/treasurer hasn't submitted a digital report yet.
-function buildBlankReportObject(type) {
-  const user = App.currentUser();
-  const { level, id } = App.scopeFor(user);
+function buildBlankReportObject(type, scopeOverride) {
+  const { level, id } = scopeOverride || App.scopeFor(App.currentUser());
   const template = App.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type);
   if (!template) return null;
   return {
@@ -1402,11 +1435,13 @@ function buildBlankReportObject(type) {
   };
 }
 
-async function downloadBlankTemplatePdf(type) {
-  const report = buildBlankReportObject(type);
+async function downloadBlankTemplatePdf(type, scopeLevel, scopeId) {
+  const scopeOverride = scopeLevel && scopeId ? { level: scopeLevel, id: scopeId } : null;
+  const report = buildBlankReportObject(type, scopeOverride);
   if (!report) { alert("No template has been set up for this report type yet."); return; }
   const ctx = ctxForReport(report);
-  App.pdfBuilding = "blank:" + type; App.render();
+  const buildKey = "blank:" + type + ":" + (report.ownerLevel) + ":" + (report.ownerId);
+  App.pdfBuilding = buildKey; App.render();
   const container = document.createElement("div");
   container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
   container.innerHTML = buildFilledReportHtml(report, ctx);
@@ -1485,11 +1520,14 @@ function templateEditorHtml(type) {
   const saved = App.templateSavedFlash === type;
   const doc = App.templateDraftDoc[type];
   const flash = App.templateUploadFlash && App.templateUploadFlash.type === type ? App.templateUploadFlash : null;
+  const savedTemplate = App.templateFor(type);
+  const isInherited = !!(savedTemplate && savedTemplate.inherited === true);
   return `<div class="cra-card cra-card-accent p-5">
     <div class="row items-center justify-between mb-4">
       <div class="row items-center gap-2">${icon(REPORT_TYPE_ICON[type], 16, "")}<h3 class="cra-display text-lg">${reportTypeLabel(type)} template</h3></div>
-      ${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}
+      <div class="row items-center gap-2">${isInherited ? badge("gold", "From parish", "landmark") : ""}${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}</div>
     </div>
+    ${isInherited ? `<p class="text-xs mb-3" style="color:var(--ink-soft)">This layout was set by your parish president and applies here automatically. Editing and saving makes it this local's own — future parish updates won't overwrite it.</p>` : ""}
     <div class="p-3 mb-4" style="background:#f5f3ea;border-radius:8px;border:1px dashed var(--gold)">
       <div class="cra-label mb-2" style="color:var(--violet)">Upload a Word (.docx) template</div>
       <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Section headings and table headers are skipped automatically, and ${type === "financial" ? "only Part B (Financial Secretary/Treasurer)" : "only Part A (Secretary)"} questions are pulled in; the layout is reused when building the filled-in PDF.</p>
@@ -1512,7 +1550,7 @@ function templateEditorHtml(type) {
     </div>
     <div class="row items-center gap-3 mt-4">
       ${btnHtml({ variant: "primary", label: "Save template", iconName: "upload", attrs: `onclick="App.saveTemplate('${type}')"` })}
-      ${fields.length > 0 ? btnHtml({ variant: "ghost", label: App.pdfBuilding === "blank:" + type ? "Building PDF…" : "Download blank form (PDF)", iconName: "download", attrs: `onclick="downloadBlankTemplatePdf('${type}')" ${App.pdfBuilding === "blank:" + type ? "disabled" : ""}` }) : ""}
+      ${fields.length > 0 ? btnHtml({ variant: "ghost", label: App.pdfBuilding && String(App.pdfBuilding).indexOf("blank:" + type + ":") === 0 ? "Building PDF…" : "Download blank form (PDF)", iconName: "download", attrs: `onclick="downloadBlankTemplatePdf('${type}')" ${App.pdfBuilding && String(App.pdfBuilding).indexOf("blank:" + type + ":") === 0 ? "disabled" : ""}` }) : ""}
       ${saved ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
     </div>
   </div>`;
@@ -1559,7 +1597,7 @@ function submitReportFormHtml(type) {
     }
   }
   // Executive roster fields (Chairman/Secretary/etc. name & phone) auto-fill from
-  // whatever the Secretary saved once on their profile — never retyped per report.
+  // whatever the IT admin saved for this scope — never retyped per report.
   const roster = App.getRosterForScope(user);
   const rosterFieldMap = {};
   template.fields.forEach((f) => {
@@ -1606,7 +1644,7 @@ function submitReportFormHtml(type) {
         input = rosterVal
           ? `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">${esc(rosterVal)}</div><input type="hidden" name="${f.id}" value="${esc(rosterVal)}" />`
           : `<div class="cra-input" style="background:#f5f3ea;color:#a3382e">Not set yet</div><input type="hidden" name="${f.id}" value="" />`;
-        return fieldWrap(f.label, input, rosterVal ? "Auto-filled from the executive roster the Secretary set for this term — this can't be edited here." : "The Secretary hasn't added this yet — it can be set once on the Secretary's profile page and will then fill in here automatically.");
+        return fieldWrap(f.label, input, rosterVal ? "Auto-filled from the executive roster your IT admin set for this term — this can't be edited here." : "Your IT admin hasn't added this to the roster yet — once they do, it'll fill in here automatically.");
       }
       const isIncome = incomeFields.some((inf) => inf.id === f.id);
       const isExpenditure = expenditureFields.some((exf) => exf.id === f.id);
@@ -1675,8 +1713,19 @@ function handleSubmitReport(e, type) {
 /*  Reports list                                                          */
 /* ==================================================================== */
 
-function reportsTableHtml(reports, showLocal, allowEdit) {
-  if (reports.length === 0) return emptyState("file", "No reports submitted yet", "Once your executives submit reports, they'll be listed here for review and download.");
+// Renders "Download blank <type> (PDF)" buttons for every report type that has a
+// template set up in the given owner scope — used so that an empty reports list
+// still lets a president pull a print-ready form (headers, tables, blank slots,
+// watermark) instead of getting nothing to download.
+function blankTemplatesActionHtml(scope) {
+  if (!scope) return "";
+  const types = Object.keys(REPORT_TYPE_LABELS).filter((type) => App.org.templates.some((t) => t.ownerLevel === scope.level && t.ownerId === scope.id && t.type === type));
+  if (!types.length) return "";
+  return `<div class="row wrap items-center justify-center gap-2">${types.map((type) => btnHtml({ variant: "ghost", label: `Blank ${reportTypeLabel(type).toLowerCase()} (PDF)`, iconName: "download", attrs: `onclick="downloadBlankTemplatePdf('${type}','${scope.level}','${scope.id}')"` })).join("")}</div>`;
+}
+
+function reportsTableHtml(reports, showLocal, allowEdit, emptyScope) {
+  if (reports.length === 0) return emptyState("file", "No reports submitted yet", "Once your executives submit reports, they'll be listed here for review and download. Meanwhile you can print a blank copy of the template below.", blankTemplatesActionHtml(emptyScope));
   const user = App.currentUser();
   const ids = reports.map((r) => r.id);
   const selectedHere = ids.filter((id) => App.selectedReportIds.has(id));
@@ -1869,9 +1918,6 @@ function handleParishSettingsSubmit(e) { e.preventDefault(); App.saveParishSetti
 function profileViewHtml() {
   const user = App.currentUser();
   const isFinancial = user.position === "Financial Secretary" || user.position === "Treasurer";
-  const isSecretary = user.position === "Secretary";
-  const rosterLocked = isSecretary && App.hasReportHistory(user);
-  const roster = user.executiveRoster || {};
   return `${pageHeader("Account", "My profile", "Your signature appears on reports you submit and on the president's downloaded PDFs.")}
   <div class="cra-card cra-card-accent p-5 max-w-md space-y-5">
     <div><div class="cra-label mb-1">Name</div><div class="text-sm font-medium">${esc(user.name)}</div></div>
@@ -1890,31 +1936,38 @@ function profileViewHtml() {
       <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report. Once you submit that report, this amount locks and your balance updates automatically after that.</p>
       ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
     </form>`) : ""}
-  </div>
-  ${isSecretary ? `<div class="cra-card cra-card-accent p-5 max-w-md space-y-4 mt-5">
-    <div>
-      <div class="cra-display text-base mb-1">Executive committee roster</div>
-      <p class="text-xs" style="color:var(--ink-soft)">Enter each executive's name and phone number once at the start of the term — they'll fill in automatically on every report that asks for them, for every report type.</p>
-    </div>
-    ${rosterLocked ? `<div class="space-y-3">
-      ${ROSTER_ROLES_DISPLAY.map((role) => `<div class="row wrap gap-2 justify-between" style="border-bottom:1px solid var(--line);padding-bottom:8px">
-        <span class="text-sm font-medium">${esc(role)}</span>
-        <span class="text-xs" style="color:var(--ink-soft)">${esc((roster[role] && roster[role].name) || "—")} ${roster[role] && roster[role].phone ? `· ${esc(roster[role].phone)}` : ""}</span>
-      </div>`).join("")}
-      <p class="text-xs" style="color:var(--ink-soft)">Locked now that you've submitted a report. This is the roster used to auto-fill every report from here on.</p>
-    </div>` : `<form onsubmit="return handleRosterSubmit(event)" class="space-y-3">
+  </div>`;
+}
+function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
+
+function rosterAdminViewHtml() {
+  const user = App.currentUser();
+  const org = App.org;
+  const scope = App.activeRosterScope();
+  const entity = scope.level === "parish" ? org.parishes.find((p) => p.id === scope.id) : org.locals.find((l) => l.id === scope.id);
+  const roster = (entity && entity.executiveRoster) || {};
+  const scopeSwitcher = `<div class="row wrap gap-2 mb-5">
+    <button class="cra-btn ${scope.level === "parish" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminRosterScope('parish','${user.parishId}')">Parish executives</button>
+    ${org.locals.filter((l) => l.parishId === user.parishId).map((l) => `<button class="cra-btn ${scope.level === "local" && scope.id === l.id ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminRosterScope('local','${l.id}')">${esc(l.name)}</button>`).join("")}
+  </div>`;
+  return `${pageHeader("Executives", "Executives roster", "Enter each executive's name and phone number for this scope — they'll fill in automatically on every report that asks for them, for every report type. Only the IT admin can edit this.")}
+  ${scopeSwitcher}
+  <div class="cra-card cra-card-accent p-5 max-w-2xl">
+    <form onsubmit="return handleAdminRosterSubmit(event)" class="space-y-3">
+      <input type="hidden" id="roster-scope-level" value="${esc(scope.level)}" />
+      <input type="hidden" id="roster-scope-id" value="${esc(scope.id || "")}" />
       ${ROSTER_ROLES_DISPLAY.map((role) => `<div class="grid sm-grid-2 gap-2">
         ${fieldWrap(`${role} — Name`, `<input class="cra-input roster-name-input" data-role="${esc(role)}" value="${esc((roster[role] && roster[role].name) || "")}" />`)}
         ${fieldWrap(`${role} — Phone`, `<input class="cra-input roster-phone-input" data-role="${esc(role)}" value="${esc((roster[role] && roster[role].phone) || "")}" />`)}
       </div>`).join("")}
-      <p class="text-xs" style="color:var(--ink-soft)">Once you submit your first report, this roster locks and updates only from here.</p>
       ${btnHtml({ variant: "primary", label: "Save roster", iconName: "check", attrs: `type="submit"` })}
-    </form>`}
-  </div>` : ""}`;
+    </form>
+  </div>`;
 }
-function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
-function handleRosterSubmit(e) {
+function handleAdminRosterSubmit(e) {
   e.preventDefault();
+  const level = document.getElementById("roster-scope-level").value;
+  const id = document.getElementById("roster-scope-id").value;
   const roster = {};
   e.target.querySelectorAll(".roster-name-input").forEach((el) => {
     const role = el.getAttribute("data-role");
@@ -1926,7 +1979,7 @@ function handleRosterSubmit(e) {
     roster[role] = roster[role] || {};
     roster[role].phone = el.value.trim();
   });
-  App.updateProfile({ executiveRoster: roster });
+  App.saveRoster(level, id, roster);
   return false;
 }
 
@@ -1958,6 +2011,7 @@ function renderApp() {
     if (!isAdmin) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
   }
   if (isAdmin) nav.push({ id: "reports", label: "All reports", iconName: "file" });
+  if (isAdmin) nav.push({ id: "roster", label: "Executives roster", iconName: "userPlus" });
   reportTypes.forEach((type) => nav.push({ id: `submit:${type}`, label: `Submit ${reportTypeLabel(type).split(" ")[0].toLowerCase()}`, iconName: REPORT_TYPE_ICON[type] }));
   if (reportTypes.length) nav.push({ id: "submissions", label: "My submissions", iconName: "scroll" });
   if (isAdmin) nav.push({ id: "parishsettings", label: "Parish settings", iconName: "cog" });
@@ -1974,6 +2028,8 @@ function renderApp() {
     content = membersViewHtml();
   } else if (App.view === "parishsettings" && isAdmin) {
     content = parishSettingsViewHtml();
+  } else if (App.view === "roster" && isAdmin) {
+    content = rosterAdminViewHtml();
   } else if (App.view === "profile") {
     content = profileViewHtml();
   } else if (App.view === "locals" && (isAdmin || (isPresident && user.level === "parish"))) {
@@ -1983,7 +2039,8 @@ function renderApp() {
     else content += `<div class="grid sm-grid-2">${parishLocals.map((l) => {
       const execCount = org.users.filter((u) => u.localId === l.id).length;
       const reportCount = org.reports.filter((r) => r.ownerId === l.id).length;
-      return `<div class="cra-card p-4"><div class="row items-center gap-2 mb-2">${icon("building", 15)}<span class="font-semibold">${esc(l.name)}</span></div><div class="text-xs mb-3" style="color:var(--ink-soft)">${esc(l.location)}</div><div class="row gap-2">${badge("violet", `${execCount} executive${execCount !== 1 ? "s" : ""}`)}${badge("green", `${reportCount} report${reportCount !== 1 ? "s" : ""}`)}${!l.presidentId ? badge("wine", "No president yet") : ""}</div></div>`;
+      const blankActions = reportCount === 0 ? blankTemplatesActionHtml({ level: "local", id: l.id }) : "";
+      return `<div class="cra-card p-4"><div class="row items-center gap-2 mb-2">${icon("building", 15)}<span class="font-semibold">${esc(l.name)}</span></div><div class="text-xs mb-3" style="color:var(--ink-soft)">${esc(l.location)}</div><div class="row gap-2 wrap">${badge("violet", `${execCount} executive${execCount !== 1 ? "s" : ""}`)}${badge("green", `${reportCount} report${reportCount !== 1 ? "s" : ""}`)}${!l.presidentId ? badge("wine", "No president yet") : ""}</div>${blankActions ? `<div class="mt-3">${blankActions}</div>` : ""}</div>`;
     }).join("")}</div>`;
   } else if (App.view === "template" && (isPresident || isAdmin)) {
     content = pageHeader("Report layout", "Report templates", "Lay out the fields your secretary and financial secretary/treasurer will fill in.");
@@ -2001,7 +2058,7 @@ function renderApp() {
     content += reportsTableHtml(allReports, true);
   } else if (App.view === "reports" && isPresident && user.level === "local") {
     content = pageHeader("Read only", "Reports submitted to you", "You can review and download these as a filled PDF.");
-    content += reportsTableHtml(myOwnReports, false);
+    content += reportsTableHtml(myOwnReports, false, false, App.scopeFor(user));
   } else if (App.view === "reports" && isPresident && user.level === "parish") {
     if (!App._parishReportsTab) App._parishReportsTab = "locals";
     content = pageHeader("Read only", "All reports", "Reports roll up from every local you've registered, plus your own parish executives.");
@@ -2009,7 +2066,7 @@ function renderApp() {
       <button class="cra-btn ${App._parishReportsTab === "locals" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App._parishReportsTab='locals'; App.render()">Local reports (${myLocalReports.length})</button>
       <button class="cra-btn ${App._parishReportsTab === "own" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App._parishReportsTab='own'; App.render()">Parish reports (${myOwnReports.length})</button>
     </div>`;
-    content += reportsTableHtml(App._parishReportsTab === "locals" ? myLocalReports : myOwnReports, App._parishReportsTab === "locals");
+    content += reportsTableHtml(App._parishReportsTab === "locals" ? myLocalReports : myOwnReports, App._parishReportsTab === "locals", false, App._parishReportsTab === "own" ? App.scopeFor(user) : null);
   } else if (App.view === "submit" && reportTypes.includes(App.submitType)) {
     content = pageHeader(user.level === "parish" ? "Parish report" : "Local report", `Submit ${reportTypeLabel(App.submitType).toLowerCase()}`, "Fill in the fields your president laid out, or add your own questions. Submitting builds the finished report automatically.");
     content += submitReportFormHtml(App.submitType);
