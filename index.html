@@ -438,6 +438,7 @@ function defaultProgramFields() {
   const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return [
     { id: "godyc_theme", label: "Theme", type: "text" },
+    { id: "godyc_location", label: "Location", type: "text", help: "Where this report's programmes/meetings took place." },
     { id: "godyc_period", label: "Period of the Report", type: "text" },
     { id: "godyc_membership", label: "Membership", type: "textarea", help: "Councils, groups, and movements represented." },
     ...ROSTER_ROLES_DISPLAY.flatMap((role) => rosterRow(role)),
@@ -734,7 +735,9 @@ const App = {
   },
   activeRosterScope() {
     const user = this.currentUser();
-    return this.adminRosterScope || { level: "parish", id: user.parishId };
+    if (user.isAdmin) return this.adminRosterScope || { level: "parish", id: user.parishId };
+    // A president manages only their own scope's roster — no scope switcher needed.
+    return this.scopeFor(user);
   },
   setAdminRosterScope(level, id) { this.adminRosterScope = { level, id }; this.render(); },
   // Only the IT admin sets the executive-committee roster (name/phone per role) now — it
@@ -763,17 +766,35 @@ const App = {
     return null;
   },
 
-  // The financial secretary/treasurer's own chain of financial reports, oldest first,
-  // used to auto-carry the running balance from one report to the next.
+  // The financial chain for this scope, oldest first — shared between the Financial
+  // Secretary and the Treasurer (both work on the same accounts), so either one's
+  // report carries the running balance into the other's next report.
   myFinancialReports(user) {
     const { level, id } = this.scopeFor(user);
     return this.org.reports
-      .filter((r) => r.type === "financial" && r.ownerLevel === level && r.ownerId === id && r.submittedBy === user.id)
+      .filter((r) => r.type === "financial" && r.ownerLevel === level && r.ownerId === id)
       .sort((a, b) => (a.submittedAt || 0) - (b.submittedAt || 0));
   },
-  // True once this financial secretary/treasurer has at least one report on record —
-  // after that their term opening balance is locked and only auto-updates from then on.
+  // True once this scope has at least one financial report on record (from either the
+  // Financial Secretary or the Treasurer) — after that the shared opening balance is
+  // locked and only auto-updates from the reports' income and expenditure from then on.
   hasFinancialHistory(user) { return this.myFinancialReports(user).length > 0; },
+  // The parish/local record itself — the shared opening balance lives here (like the
+  // executive roster) so it survives a change of Financial Secretary or Treasurer and
+  // is visible to both of them, instead of being tied to one person's account.
+  getFinancialEntity(user) {
+    const { level, id } = this.scopeFor(user);
+    return level === "parish" ? this.org.parishes.find((x) => x.id === id) : this.org.locals.find((x) => x.id === id);
+  },
+  async saveFinancialOpeningBalance(amount) {
+    const user = this.currentUser();
+    const { level, id } = this.scopeFor(user);
+    await this.updateOrg((o) => {
+      const entity = level === "parish" ? o.parishes.find((x) => x.id === id) : o.locals.find((x) => x.id === id);
+      if (entity) entity.financialTermOpeningBalance = amount;
+      return o;
+    });
+  },
   // The executive-committee roster (name/phone per role) the IT admin set for this
   // reporting scope (parish or local), used to auto-fill matching fields on every report.
   getRosterForScope(user) {
@@ -796,7 +817,8 @@ const App = {
       const v = parseFloat(last.data[closingField.id]);
       if (!isNaN(v)) return v;
     }
-    const opening = parseFloat(user.termOpeningBalance);
+    const entity = this.getFinancialEntity(user);
+    const opening = parseFloat(entity && entity.financialTermOpeningBalance);
     return isNaN(opening) ? 0 : opening;
   },
 
@@ -1017,6 +1039,18 @@ const App = {
     if (!file) return;
     const dataUrl = await fileToDataUrl(file);
     await this.updateProfile({ signatureDataUrl: dataUrl });
+  },
+  // The president uploads this once; it's then stamped as a faded watermark behind
+  // every report and blank-template PDF downloaded from their parish.
+  async uploadReportWatermark(file) {
+    if (!file) return;
+    const dataUrl = await fileToDataUrl(file);
+    const user = this.currentUser();
+    await this.updateOrg((o) => { const p = o.parishes.find((x) => x.id === user.parishId); if (p) p.reportWatermarkDataUrl = dataUrl; return o; });
+  },
+  async removeReportWatermark() {
+    const user = this.currentUser();
+    await this.updateOrg((o) => { const p = o.parishes.find((x) => x.id === user.parishId); if (p) p.reportWatermarkDataUrl = null; return o; });
   },
 
   render() { render(); },
@@ -1379,6 +1413,14 @@ function executivesForReport(report) {
   });
 }
 
+// The executive roster (Chairman, Chaplain, etc.) for whichever parish/local owns
+// this report — used to auto-fill the Endorsed by / Vetted by signatories.
+function rosterForReportScope(report) {
+  if (report.ownerLevel === "parish") { const p = App.org.parishes.find((x) => x.id === report.ownerId); return (p && p.executiveRoster) || {}; }
+  const l = App.org.locals.find((x) => x.id === report.ownerId);
+  return (l && l.executiveRoster) || {};
+}
+
 function signatoriesTableHtml(execs) {
   if (!execs.length) return "";
   const rows = execs.map((u) => `
@@ -1450,32 +1492,78 @@ function buildFilledReportHtml(report, ctx) {
     body = fields.map((f) => `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${answerBlock(f)}`).join("");
   }
 
-  const signatureBlocks = isBlank
-    ? `${signatureBlock({ name: "____________________", signatureDataUrl: null }, reportTypeLabel(report.type).includes("Financial") ? "Financial Secretary / Treasurer" : "Secretary")}`
-    : (executives.length ? executives.map((u) => signatureBlock(u, u.isAdmin ? "IT Admin" : u.position)).join("") : signatureBlock(submitter, report.position));
+  // Prepared by / Endorsed by / Vetted by — the standard GODYC sign-off line.
+  // "Prepared by" is whoever submitted the report (their uploaded signature shows
+  // automatically if they have one). "Endorsed by" and "Vetted by" pull the
+  // Chairman's and the Diocesan Youth Chaplain's names straight from the executive
+  // roster the president/admin set for this scope — no retyping, and they can sign
+  // by hand on the printed copy since the roster only stores names, not signatures.
+  const roster = isBlank ? {} : rosterForReportScope(report);
+  const chairmanName = (roster["Chairman"] && roster["Chairman"].name) || "";
+  const chaplainName = (roster["Chaplain"] && roster["Chaplain"].name) || "";
+  const isFinancialReport = reportTypeLabel(report.type).includes("Financial");
+  const preparedByUser = isBlank
+    ? { name: "____________________", signatureDataUrl: null }
+    : { name: report.submitterName || (submitter ? submitter.name : "____________________"), signatureDataUrl: submitter ? submitter.signatureDataUrl : null };
+  const signatureBlocks = `
+    ${signatureBlock(preparedByUser, isFinancialReport ? "Prepared by (Financial Secretary/Treasurer)" : "Prepared by (Secretary)")}
+    ${signatureBlock({ name: chairmanName || "____________________", signatureDataUrl: null }, "Endorsed by (Chairman)")}
+    ${signatureBlock({ name: chaplainName || "____________________", signatureDataUrl: null }, "Vetted by (Diocesan Youth Chaplain)")}
+  `;
 
   const footer = `
     <div style="margin-top:26px;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:20px">
       ${signatureBlocks}
     </div>
-    <div style="margin-top:24px;font-size:10px;color:#8a8698;text-align:center">${isBlank ? "Blank template — print and fill by hand, or fill in the app and submit for the real record." : "Reviewed &amp; downloaded via the parish register. Read-only record."}</div>`;
+    <div style="margin-top:16px;font-size:10px;color:#8a8698;text-align:center">Enquiries: godycoffice@yahoo.com</div>
+    <div style="margin-top:6px;font-size:10px;color:#8a8698;text-align:center">${isBlank ? "Blank template — print and fill by hand, or fill in the app and submit for the real record." : "Reviewed &amp; downloaded via the parish register. Read-only record."}</div>`;
 
-  return `<div style="position:relative;font-family:'Inter',ui-sans-serif,sans-serif;color:#211f2e;background-color:#ffffff;padding:28px;max-width:720px">
-    <div style="position:absolute;inset:0;text-align:center;overflow:hidden;pointer-events:none;z-index:0"><img src="${GODYC_WATERMARK_DATA_URL}" style="width:360px;max-width:68%;height:auto;margin-top:18%" /></div>
+  const watermarkSrc = (ctx.parish && ctx.parish.reportWatermarkDataUrl) || GODYC_WATERMARK_DATA_URL;
+  return `<div style="position:relative;font-family:'Inter',ui-sans-serif,sans-serif;color:#211f2e;background-color:#ffffff;padding:28px;width:764px">
+    <div style="position:absolute;inset:0;text-align:center;overflow:hidden;pointer-events:none;z-index:0;opacity:0.9"><img src="${watermarkSrc}" style="width:360px;max-width:68%;height:auto;margin-top:18%" /></div>
     <div style="position:relative;z-index:1">${header}${body}${footer}</div>
   </div>`;
 }
+
+// Building the PDF from a detached, off-screen container is fragile in two common
+// ways that both produce a blank page: (1) html2canvas snapshots before the
+// base64 signature/logo/watermark <img> tags have actually decoded, and (2) an
+// element with no explicit width, positioned far off-screen, can get measured as
+// zero-size by the browser before layout settles. This helper avoids both: it
+// gives the container a fixed width, keeps it inside the visible layout flow
+// (just invisible via opacity, not moved off-screen), and waits for every image
+// inside it to finish loading before handing it to html2canvas.
+function makePdfContainer(html) {
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.top = "0";
+  container.style.left = "0";
+  container.style.width = "820px";
+  container.style.zIndex = "-1";
+  container.style.opacity = "0.01";
+  container.style.pointerEvents = "none";
+  container.style.background = "#ffffff";
+  container.innerHTML = html;
+  document.body.appendChild(container);
+  return container;
+}
+function waitForImages(container) {
+  const imgs = Array.from(container.querySelectorAll("img"));
+  return Promise.all(imgs.map((img) => {
+    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+    return new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 3000); });
+  }));
+}
+const PDF_HTML2CANVAS_OPTS = { scale: 2, backgroundColor: "#ffffff", useCORS: true, scrollX: 0, scrollY: 0 };
 
 async function downloadReportPdf(reportId) {
   const report = App.org.reports.find((r) => r.id === reportId);
   const ctx = ctxForReport(report);
   App.pdfBuilding = reportId; App.render();
-  const container = document.createElement("div");
-  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
-  container.innerHTML = buildFilledReportHtml(report, ctx);
-  document.body.appendChild(container);
+  const container = makePdfContainer(buildFilledReportHtml(report, ctx));
   try {
-    await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
+    await waitForImages(container);
+    await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: PDF_HTML2CANVAS_OPTS, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser. Try the .txt download instead."); }
   finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
 }
@@ -1504,12 +1592,10 @@ async function downloadBlankTemplatePdf(type, scopeLevel, scopeId) {
   const ctx = ctxForReport(report);
   const buildKey = "blank:" + type + ":" + (report.ownerLevel) + ":" + (report.ownerId);
   App.pdfBuilding = buildKey; App.render();
-  const container = document.createElement("div");
-  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
-  container.innerHTML = buildFilledReportHtml(report, ctx);
-  document.body.appendChild(container);
+  const container = makePdfContainer(buildFilledReportHtml(report, ctx));
   try {
-    await html2pdf().set({ margin: 10, filename: `blank-${type}-template.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
+    await waitForImages(container);
+    await html2pdf().set({ margin: 10, filename: `blank-${type}-template.pdf`, html2canvas: PDF_HTML2CANVAS_OPTS, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser."); }
   finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
 }
@@ -1522,14 +1608,12 @@ async function downloadSelectedReportsPdf() {
   const reports = ids.map((id) => App.org.reports.find((r) => r.id === id)).filter(Boolean);
   if (!reports.length) return;
   App.bulkPdfBuilding = true; App.render();
-  const container = document.createElement("div");
-  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
-  container.innerHTML = reports.map((r, i) => `<div style="${i > 0 ? "page-break-before:always;" : ""}">${buildFilledReportHtml(r, ctxForReport(r))}</div>`).join("");
-  document.body.appendChild(container);
+  const container = makePdfContainer(reports.map((r, i) => `<div style="${i > 0 ? "page-break-before:always;" : ""}">${buildFilledReportHtml(r, ctxForReport(r))}</div>`).join(""));
   try {
+    await waitForImages(container);
     await html2pdf().set({
       margin: 10, filename: `reports-bulk-${reports.length}.pdf`,
-      html2canvas: { scale: 2, backgroundColor: "#ffffff" },
+      html2canvas: PDF_HTML2CANVAS_OPTS,
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       pagebreak: { mode: ["css", "legacy"] },
     }).from(container).save();
@@ -1980,20 +2064,29 @@ function parishesViewHtml() {
   <p class="text-xs mt-3" style="color:var(--ink-soft)">Deleting a parish removes it and its locals, members, templates and reports here. Emails used under it stay reserved in Firebase Authentication — delete them under Authentication → Users in your Firebase console to free them up completely.</p>`;
 }
 
-function parishSettingsViewHtml() {
+function parishSettingsViewHtml(isAdmin) {
   const admin = App.currentUser();
   const parish = App.org.parishes.find((p) => p.id === admin.parishId);
-  return `${pageHeader("IT Admin", "Parish settings", "Update the parish's name, location and logo — this appears on every report and PDF.")}
+  return `${pageHeader(isAdmin ? "IT Admin" : "President", isAdmin ? "Parish settings" : "Report branding", isAdmin ? "Update the parish's name, location and logo — this appears on every report and PDF." : "Upload the watermark image that appears on every downloaded report PDF.")}
   <div class="cra-card cra-card-accent p-5 max-w-md">
-    <div class="row items-center gap-3 mb-5">
+    ${isAdmin ? `<div class="row items-center gap-3 mb-5">
       <div class="cra-seal" style="width:56px;height:56px">${parish.logoDataUrl ? `<img src="${parish.logoDataUrl}" />` : icon("landmark", 22)}</div>
       <label class="cra-btn cra-btn-ghost relative" style="cursor:pointer">${icon("upload", 13)} Upload logo<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadParishLogo(this.files[0])" /></label>
     </div>
-    <form class="space-y-4" onsubmit="return handleParishSettingsSubmit(event)">
+    <form class="space-y-4 mb-6" onsubmit="return handleParishSettingsSubmit(event)">
       ${fieldWrap("Parish name", `<input id="parish-name" class="cra-input" required value="${esc(parish.name)}" />`)}
       ${fieldWrap("Location", `<input id="parish-location" class="cra-input" value="${esc(parish.location || "")}" />`)}
       ${btnHtml({ variant: "primary", label: "Save changes", iconName: "check", attrs: `type="submit"` })}
-    </form>
+    </form>` : ""}
+    <div style="border-top:${isAdmin ? "1px solid var(--line);padding-top:1.25rem" : "none"}">
+      <div class="cra-label mb-2">Report watermark</div>
+      <p class="text-xs mb-3" style="color:var(--ink-soft)">This image appears faded behind every downloaded report and blank template PDF. Until you upload one, the built-in GODYC watermark is used.</p>
+      ${parish.reportWatermarkDataUrl ? `<img src="${parish.reportWatermarkDataUrl}" style="max-width:160px;max-height:120px;display:block;margin-bottom:10px;border:1px solid var(--line);border-radius:6px" />` : ""}
+      <div class="row wrap items-center gap-2">
+        <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("upload", 13)} ${parish.reportWatermarkDataUrl ? "Replace watermark" : "Upload watermark"}<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadReportWatermark(this.files[0])" /></label>
+        ${parish.reportWatermarkDataUrl ? btnHtml({ variant: "ghost", label: "Remove", iconName: "x", attrs: `onclick="App.removeReportWatermark()"` }) : ""}
+      </div>
+    </div>
   </div>`;
 }
 function handleParishSettingsSubmit(e) { e.preventDefault(); App.saveParishSettings(document.getElementById("parish-name").value, document.getElementById("parish-location").value); return false; }
@@ -2010,30 +2103,35 @@ function profileViewHtml() {
       ${user.signatureDataUrl ? `<img class="sig-thumb mb-2" src="${user.signatureDataUrl}" />` : `<p class="text-xs mb-2" style="color:var(--ink-soft)">No signature uploaded yet.</p>`}
       <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("pen", 13)} ${user.signatureDataUrl ? "Replace signature" : "Upload signature"}<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadSignature(this.files[0])" /></label>
     </div>
-    ${isFinancial ? (App.hasFinancialHistory(user) ? `<div class="space-y-2">
+    ${isFinancial ? (() => {
+      const entity = App.getFinancialEntity(user);
+      const sharedBalance = entity ? entity.financialTermOpeningBalance : "";
+      return App.hasFinancialHistory(user) ? `<div class="space-y-2">
       <div class="cra-label mb-1">Opening balance at start of term (GHS)</div>
-      <div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">GHS ${fmtMoney(parseFloat(user.termOpeningBalance) || 0)}</div>
-      <p class="text-xs" style="color:var(--ink-soft)">Locked now that you've submitted a financial report — your balance updates automatically from your reports' income and expenditure from here on.</p>
+      <div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">GHS ${fmtMoney(parseFloat(sharedBalance) || 0)}</div>
+      <p class="text-xs" style="color:var(--ink-soft)">Locked now that a financial report has been submitted — the balance updates automatically from income and expenditure from here on. Shared with the Financial Secretary/Treasurer counterpart on this account.</p>
     </div>` : `<form onsubmit="return handleTermBalanceSubmit(event)" class="space-y-2">
-      ${fieldWrap("Opening balance at start of term (GHS)", `<input id="term-balance" class="cra-input" type="number" value="${esc(user.termOpeningBalance || "")}" placeholder="Amount you started your term with" />`)}
-      <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report. Once you submit that report, this amount locks and your balance updates automatically after that.</p>
+      ${fieldWrap("Opening balance at start of term (GHS)", `<input id="term-balance" class="cra-input" type="number" value="${esc(sharedBalance || "")}" placeholder="Amount you started your term with" />`)}
+      <p class="text-xs" style="color:var(--ink-soft)">Shared between the Financial Secretary and Treasurer — whichever of you sets it first, it fills in for both. Used to pre-fill the opening balance on the first financial report; once submitted, this locks and the balance updates automatically after that.</p>
       ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
-    </form>`) : ""}
+    </form>`;
+    })() : ""}
   </div>`;
 }
-function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
+function handleTermBalanceSubmit(e) { e.preventDefault(); App.saveFinancialOpeningBalance(document.getElementById("term-balance").value); return false; }
 
 function rosterAdminViewHtml() {
   const user = App.currentUser();
+  const isAdmin = !!user.isAdmin;
   const org = App.org;
   const scope = App.activeRosterScope();
   const entity = scope.level === "parish" ? org.parishes.find((p) => p.id === scope.id) : org.locals.find((l) => l.id === scope.id);
   const roster = (entity && entity.executiveRoster) || {};
-  const scopeSwitcher = `<div class="row wrap gap-2 mb-5">
+  const scopeSwitcher = isAdmin ? `<div class="row wrap gap-2 mb-5">
     <button class="cra-btn ${scope.level === "parish" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminRosterScope('parish','${user.parishId}')">Parish executives</button>
     ${org.locals.filter((l) => l.parishId === user.parishId).map((l) => `<button class="cra-btn ${scope.level === "local" && scope.id === l.id ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminRosterScope('local','${l.id}')">${esc(l.name)}</button>`).join("")}
-  </div>`;
-  return `${pageHeader("Executives", "Executives roster", "Enter each executive's name and phone number for this scope — they'll fill in automatically on every report that asks for them, for every report type. Only the IT admin can edit this.")}
+  </div>` : "";
+  return `${pageHeader("Executives", "Executives roster", isAdmin ? "Enter each executive's name and phone number for this scope — they'll fill in automatically on every report that asks for them, for every report type." : "Enter each executive's name and phone number from the start of the term — they'll fill in automatically on every report, and appear as the Endorsed by / Vetted by signatories on the downloaded PDF.")}
   ${scopeSwitcher}
   <div class="cra-card cra-card-accent p-5 max-w-2xl">
     <form onsubmit="return handleAdminRosterSubmit(event)" class="space-y-3">
@@ -2094,10 +2192,10 @@ function renderApp() {
     if (!isAdmin) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
   }
   if (isAdmin) nav.push({ id: "reports", label: "All reports", iconName: "file" });
-  if (isAdmin) nav.push({ id: "roster", label: "Executives roster", iconName: "userPlus" });
+  if (isAdmin || isPresident) nav.push({ id: "roster", label: "Executives roster", iconName: "userPlus" });
   reportTypes.forEach((type) => nav.push({ id: `submit:${type}`, label: `Submit ${reportTypeLabel(type).split(" ")[0].toLowerCase()}`, iconName: REPORT_TYPE_ICON[type] }));
   if (reportTypes.length) nav.push({ id: "submissions", label: "My submissions", iconName: "scroll" });
-  if (isAdmin) nav.push({ id: "parishsettings", label: "Parish settings", iconName: "cog" });
+  if (isAdmin || (isPresident && user.level === "parish")) nav.push({ id: "parishsettings", label: isAdmin ? "Parish settings" : "Report branding", iconName: "cog" });
   nav.push({ id: "structure", label: "Structure", iconName: "users" });
   nav.push({ id: "profile", label: "My profile", iconName: "pen" });
 
@@ -2111,9 +2209,9 @@ function renderApp() {
     content = membersViewHtml();
   } else if (App.view === "parishes" && isAdmin) {
     content = parishesViewHtml();
-  } else if (App.view === "parishsettings" && isAdmin) {
-    content = parishSettingsViewHtml();
-  } else if (App.view === "roster" && isAdmin) {
+  } else if (App.view === "parishsettings" && (isAdmin || (isPresident && user.level === "parish"))) {
+    content = parishSettingsViewHtml(isAdmin);
+  } else if (App.view === "roster" && (isAdmin || isPresident)) {
     content = rosterAdminViewHtml();
   } else if (App.view === "profile") {
     content = profileViewHtml();
