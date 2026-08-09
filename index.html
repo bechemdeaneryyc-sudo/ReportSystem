@@ -270,6 +270,23 @@ const FIELD_TYPES = [
 ];
 const REPORT_TYPE_LABELS = { program: "Programmes & Activities Report", financial: "Financial Report", survey: "Youth Survey Report" };
 const REPORT_TYPE_TONE = { program: "violet", financial: "green", survey: "gold" };
+// Executive-committee roster fields the Secretary sets once per term; every report
+// auto-fills matching "Role — Name" / "Role — Phone" fields from it. Ordered most-specific
+// first so e.g. "Financial Secretary" is matched before the plain "Secretary" role.
+const ROSTER_ROLES = ["Deputy Ladies' Commissioner", "Ladies' Commissioner", "Financial Secretary", "Vice Secretary", "Secretary", "Vice Chairman", "Chairman", "Organizer", "Porter/P.R.O", "Chaplain"];
+// Same roles, in the natural order they should be shown/entered in on the profile page.
+const ROSTER_ROLES_DISPLAY = ["Chairman", "Vice Chairman", "Secretary", "Vice Secretary", "Ladies' Commissioner", "Deputy Ladies' Commissioner", "Organizer", "Financial Secretary", "Porter/P.R.O", "Chaplain"];
+function matchRosterField(label) {
+  const norm = String(label || "");
+  const simplify = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[.\s]/g, "");
+  const normSimplified = simplify(norm);
+  for (const role of ROSTER_ROLES) {
+    if (normSimplified.indexOf(simplify(role)) === -1) continue;
+    if (/name/i.test(norm)) return { role, kind: "name" };
+    if (/phone|tel(?:ephone)?|contact|number/i.test(norm)) return { role, kind: "phone" };
+  }
+  return null;
+}
 const REPORT_TYPE_ICON = { program: "clipboard", financial: "wallet", survey: "scroll" };
 
 function reportTypesForPosition(pos) {
@@ -690,6 +707,16 @@ const App = {
   // True once this financial secretary/treasurer has at least one report on record —
   // after that their term opening balance is locked and only auto-updates from then on.
   hasFinancialHistory(user) { return this.myFinancialReports(user).length > 0; },
+  // True once this person has submitted any report at all — used to lock their
+  // one-time term data (executive roster, opening balance) once their term has begun.
+  hasReportHistory(user) { return this.org.reports.some((r) => r.submittedBy === user.id); },
+  // The executive-committee roster (name/phone per role) set by the Secretary for
+  // this reporting scope, used to auto-fill matching fields on every report.
+  getRosterForScope(user) {
+    const { level, id } = this.scopeFor(user);
+    const secretary = this.org.users.find((u) => u.level === level && (level === "parish" ? u.parishId === id : u.localId === id) && u.position === "Secretary");
+    return (secretary && secretary.executiveRoster) || {};
+  },
   // Computes the opening balance that should be carried into a report: the closing
   // balance of the report immediately before it in this person's own chain, or their
   // term opening balance if this is their first-ever report. Never user-editable —
@@ -1522,6 +1549,16 @@ function submitReportFormHtml(type) {
       }
     }
   }
+  // Executive roster fields (Chairman/Secretary/etc. name & phone) auto-fill from
+  // whatever the Secretary saved once on their profile — never retyped per report.
+  const roster = App.getRosterForScope(user);
+  const rosterFieldMap = {};
+  template.fields.forEach((f) => {
+    if (openingField && f.id === openingField.id) return;
+    if (closingField && f.id === closingField.id) return;
+    const m = matchRosterField(f.label);
+    if (m) rosterFieldMap[f.id] = m;
+  });
   return `
   ${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}
   ${isFinancial && openingField ? `<div class="row items-center gap-3 p-4 mb-4 cra-card" style="background:linear-gradient(135deg, rgba(44,36,81,0.06), rgba(163,129,47,0.08));border-color:var(--gold)">
@@ -1551,6 +1588,15 @@ function submitReportFormHtml(type) {
         const val = submitFormValues[f.id] || "0";
         input = `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)" id="fin-closing-display">GHS ${fmtMoney(parseFloat(val) || 0)}</div><input type="hidden" id="fin-closing-hidden" name="${f.id}" value="${esc(val)}" />`;
         return fieldWrap(f.label, input, "Calculated automatically as opening balance + income − expenditure — this can't be edited directly.");
+      }
+      if (rosterFieldMap[f.id]) {
+        const { role, kind } = rosterFieldMap[f.id];
+        const rosterVal = (roster[role] && roster[role][kind]) || "";
+        submitFormValues[f.id] = rosterVal;
+        input = rosterVal
+          ? `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">${esc(rosterVal)}</div><input type="hidden" name="${f.id}" value="${esc(rosterVal)}" />`
+          : `<div class="cra-input" style="background:#f5f3ea;color:#a3382e">Not set yet</div><input type="hidden" name="${f.id}" value="" />`;
+        return fieldWrap(f.label, input, rosterVal ? "Auto-filled from the executive roster the Secretary set for this term — this can't be edited here." : "The Secretary hasn't added this yet — it can be set once on the Secretary's profile page and will then fill in here automatically.");
       }
       const isIncome = incomeFields.some((inf) => inf.id === f.id);
       const isExpenditure = expenditureFields.some((exf) => exf.id === f.id);
@@ -1812,6 +1858,9 @@ function handleParishSettingsSubmit(e) { e.preventDefault(); App.saveParishSetti
 function profileViewHtml() {
   const user = App.currentUser();
   const isFinancial = user.position === "Financial Secretary" || user.position === "Treasurer";
+  const isSecretary = user.position === "Secretary";
+  const rosterLocked = isSecretary && App.hasReportHistory(user);
+  const roster = user.executiveRoster || {};
   return `${pageHeader("Account", "My profile", "Your signature appears on reports you submit and on the president's downloaded PDFs.")}
   <div class="cra-card cra-card-accent p-5 max-w-md space-y-5">
     <div><div class="cra-label mb-1">Name</div><div class="text-sm font-medium">${esc(user.name)}</div></div>
@@ -1830,9 +1879,45 @@ function profileViewHtml() {
       <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report. Once you submit that report, this amount locks and your balance updates automatically after that.</p>
       ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
     </form>`) : ""}
-  </div>`;
+  </div>
+  ${isSecretary ? `<div class="cra-card cra-card-accent p-5 max-w-md space-y-4 mt-5">
+    <div>
+      <div class="cra-display text-base mb-1">Executive committee roster</div>
+      <p class="text-xs" style="color:var(--ink-soft)">Enter each executive's name and phone number once at the start of the term — they'll fill in automatically on every report that asks for them, for every report type.</p>
+    </div>
+    ${rosterLocked ? `<div class="space-y-3">
+      ${ROSTER_ROLES_DISPLAY.map((role) => `<div class="row wrap gap-2 justify-between" style="border-bottom:1px solid var(--line);padding-bottom:8px">
+        <span class="text-sm font-medium">${esc(role)}</span>
+        <span class="text-xs" style="color:var(--ink-soft)">${esc((roster[role] && roster[role].name) || "—")} ${roster[role] && roster[role].phone ? `· ${esc(roster[role].phone)}` : ""}</span>
+      </div>`).join("")}
+      <p class="text-xs" style="color:var(--ink-soft)">Locked now that you've submitted a report. This is the roster used to auto-fill every report from here on.</p>
+    </div>` : `<form onsubmit="return handleRosterSubmit(event)" class="space-y-3">
+      ${ROSTER_ROLES_DISPLAY.map((role) => `<div class="grid sm-grid-2 gap-2">
+        ${fieldWrap(`${role} — Name`, `<input class="cra-input roster-name-input" data-role="${esc(role)}" value="${esc((roster[role] && roster[role].name) || "")}" />`)}
+        ${fieldWrap(`${role} — Phone`, `<input class="cra-input roster-phone-input" data-role="${esc(role)}" value="${esc((roster[role] && roster[role].phone) || "")}" />`)}
+      </div>`).join("")}
+      <p class="text-xs" style="color:var(--ink-soft)">Once you submit your first report, this roster locks and updates only from here.</p>
+      ${btnHtml({ variant: "primary", label: "Save roster", iconName: "check", attrs: `type="submit"` })}
+    </form>`}
+  </div>` : ""}`;
 }
 function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
+function handleRosterSubmit(e) {
+  e.preventDefault();
+  const roster = {};
+  e.target.querySelectorAll(".roster-name-input").forEach((el) => {
+    const role = el.getAttribute("data-role");
+    roster[role] = roster[role] || {};
+    roster[role].name = el.value.trim();
+  });
+  e.target.querySelectorAll(".roster-phone-input").forEach((el) => {
+    const role = el.getAttribute("data-role");
+    roster[role] = roster[role] || {};
+    roster[role].phone = el.value.trim();
+  });
+  App.updateProfile({ executiveRoster: roster });
+  return false;
+}
 
 /* ==================================================================== */
 /*  App shell                                                              */
