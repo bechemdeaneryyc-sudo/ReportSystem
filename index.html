@@ -896,6 +896,19 @@ const App = {
       return o;
     });
   },
+  async deleteParish(parishId) {
+    const admin = this.currentUser();
+    if (parishId === admin.parishId) { alert("You can't delete your own parish from here — use Parish settings instead."); return; }
+    await this.updateOrg((o) => {
+      const localIds = o.locals.filter((l) => l.parishId === parishId).map((l) => l.id);
+      o.users = o.users.filter((u) => u.parishId !== parishId);
+      o.locals = o.locals.filter((l) => l.parishId !== parishId);
+      o.templates = o.templates.filter((t) => !((t.ownerLevel === "parish" && t.ownerId === parishId) || (t.ownerLevel === "local" && localIds.includes(t.ownerId))));
+      o.reports = o.reports.filter((r) => !((r.ownerLevel === "parish" && r.ownerId === parishId) || (r.ownerLevel === "local" && localIds.includes(r.ownerId))));
+      o.parishes = o.parishes.filter((p) => p.id !== parishId);
+      return o;
+    });
+  },
   async sendMemberResetEmail(userId) {
     const u = this.org.users.find((x) => x.id === userId);
     if (!u) return;
@@ -1886,15 +1899,34 @@ function overviewPanelHtml(ctx) {
 
 function membersViewHtml() {
   const admin = App.currentUser();
-  const members = App.org.users.filter((u) => u.parishId === admin.parishId);
-  return `${pageHeader("IT Admin", "Members", "Everyone registered under this parish and its locals.", btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", attrs: `onclick="App.showAddMember=true; App.addMemberDraft={level:'local',localId:'',position:'',name:'',email:'',password:''}; App.render()"` }))}
+  const members = App.org.users;
+  return `${pageHeader("IT Admin", "Members", "Everyone registered across every parish — review any account (including a previously-used email) and remove it if needed.", btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", attrs: `onclick="App.showAddMember=true; App.addMemberDraft={level:'local',localId:'',position:'',name:'',email:'',password:''}; App.render()"` }))}
   <div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
-    <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Name</th><th class="px-4 py-2 cra-label">Email</th><th class="px-4 py-2 cra-label">Scope</th><th class="px-4 py-2 cra-label">Position</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
+    <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Name</th><th class="px-4 py-2 cra-label">Email</th><th class="px-4 py-2 cra-label">Parish</th><th class="px-4 py-2 cra-label">Scope</th><th class="px-4 py-2 cra-label">Position</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
     <tbody>${members.map((u) => {
       const local = u.localId ? App.org.locals.find((l) => l.id === u.localId) : null;
-      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(u.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(u.email)}</td><td class="px-4 py-3">${local ? esc(local.name) : "Parish"}</td><td class="px-4 py-3">${badge(u.isAdmin ? "gold" : "violet", u.isAdmin ? "IT Admin" : u.position)}</td><td class="px-4 py-3 text-right"><div class="row gap-2 justify-end">${btnHtml({ variant: "ghost", label: "Reset password", iconName: "lock", size: 12, attrs: `onclick="App.sendMemberResetEmail('${u.id}')"` })}${u.id === admin.id ? `<span class="text-xs" style="color:var(--ink-soft)">You</span>` : btnHtml({ variant: "danger", label: "Remove", iconName: "trash", size: 12, attrs: `onclick="if(confirm('Remove ${esc(u.name)}?')) App.removeMember('${u.id}')"` })}</div></td></tr>`;
+      const parish = App.org.parishes.find((p) => p.id === u.parishId);
+      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(u.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(u.email)}</td><td class="px-4 py-3 text-xs">${parish ? esc(parish.name) : "—"}</td><td class="px-4 py-3">${local ? esc(local.name) : "Parish"}</td><td class="px-4 py-3">${badge(u.isAdmin ? "gold" : "violet", u.isAdmin ? "IT Admin" : u.position)}</td><td class="px-4 py-3 text-right"><div class="row gap-2 justify-end">${btnHtml({ variant: "ghost", label: "Reset password", iconName: "lock", size: 12, attrs: `onclick="App.sendMemberResetEmail('${u.id}')"` })}${u.id === admin.id ? `<span class="text-xs" style="color:var(--ink-soft)">You</span>` : btnHtml({ variant: "danger", label: "Remove", iconName: "trash", size: 12, attrs: `onclick="if(confirm('Remove ${esc(u.name)} (${esc(u.email)})?')) App.removeMember('${u.id}')"` })}</div></td></tr>`;
     }).join("")}</tbody>
-  </table></div></div>`;
+  </table></div></div>
+  <p class="text-xs mt-3" style="color:var(--ink-soft)">Removing someone here deletes their record from the register. Their email stays reserved in Firebase Authentication — for a total reset, also delete that person under Authentication → Users in your Firebase console.</p>`;
+}
+
+function parishesViewHtml() {
+  const admin = App.currentUser();
+  const parishes = App.org.parishes;
+  return `${pageHeader("IT Admin", "Parishes", "Every parish registered on this instance — including ones set up by another president.")}
+  <div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
+    <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Parish</th><th class="px-4 py-2 cra-label">Location</th><th class="px-4 py-2 cra-label">President</th><th class="px-4 py-2 cra-label">Locals</th><th class="px-4 py-2 cra-label">Members</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
+    <tbody>${parishes.map((p) => {
+      const president = App.org.users.find((u) => u.id === p.presidentId);
+      const localCount = App.org.locals.filter((l) => l.parishId === p.id).length;
+      const memberCount = App.org.users.filter((u) => u.parishId === p.id).length;
+      const isOwn = p.id === admin.parishId;
+      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(p.name)}${isOwn ? ` ${badge("gold", "Your parish")}` : ""}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(p.location || "—")}</td><td class="px-4 py-3 text-xs">${president ? `${esc(president.name)} · ${esc(president.email)}` : "—"}</td><td class="px-4 py-3">${localCount}</td><td class="px-4 py-3">${memberCount}</td><td class="px-4 py-3 text-right">${isOwn ? `<span class="text-xs" style="color:var(--ink-soft)">Manage in Parish settings</span>` : btnHtml({ variant: "danger", label: "Delete parish", iconName: "trash", size: 12, attrs: `onclick="if(confirm('Delete ${esc(p.name)} and everything under it — locals, members, templates and reports? This cannot be undone.')) App.deleteParish('${p.id}')"` })}</td></tr>`;
+    }).join("")}</tbody>
+  </table></div></div>
+  <p class="text-xs mt-3" style="color:var(--ink-soft)">Deleting a parish removes it and its locals, members, templates and reports here. Emails used under it stay reserved in Firebase Authentication — delete them under Authentication → Users in your Firebase console to free them up completely.</p>`;
 }
 
 function parishSettingsViewHtml() {
@@ -2004,7 +2036,7 @@ function renderApp() {
   const mySubmissions = org.reports.filter((r) => r.submittedBy === user.id);
 
   const nav = [{ id: "overview", label: "Overview", iconName: "home" }];
-  if (isAdmin) { nav.push({ id: "members", label: "Members", iconName: "users" }); }
+  if (isAdmin) { nav.push({ id: "members", label: "Members", iconName: "users" }); nav.push({ id: "parishes", label: "Parishes", iconName: "landmark" }); }
   if ((user.level === "parish" && isPresident) || isAdmin) nav.push({ id: "locals", label: "Locals", iconName: "building" });
   if (isPresident || isAdmin) {
     nav.push({ id: "template", label: "Report templates", iconName: "upload" });
@@ -2026,6 +2058,8 @@ function renderApp() {
     content = overviewPanelHtml({ user, parish, local, myLocals, myOwnReports, myLocalReports, mySubmissions, reportTypes, isPresident, isAdmin });
   } else if (App.view === "members" && isAdmin) {
     content = membersViewHtml();
+  } else if (App.view === "parishes" && isAdmin) {
+    content = parishesViewHtml();
   } else if (App.view === "parishsettings" && isAdmin) {
     content = parishSettingsViewHtml();
   } else if (App.view === "roster" && isAdmin) {
