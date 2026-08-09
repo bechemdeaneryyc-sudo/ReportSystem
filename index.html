@@ -370,6 +370,8 @@ function parseTemplateFields(rawText, type) {
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function fmtMoney(n) { const v = isNaN(n) ? 0 : n; return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function todayDisplay() { return new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }); }
+function todayISODate() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function displayDateFromISO(iso) { if (!iso) return "—"; const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }); }
 function monthYearDisplay() { return new Date().toLocaleDateString(undefined, { year: "numeric", month: "long" }); }
 
 /* ==================================================================== */
@@ -788,24 +790,29 @@ const App = {
     this.view = "submit"; this.render();
   },
 
-  async submitReport(type, values, frequency, eventName, customFields) {
+  async submitReport(type, values, frequency, eventName, customFields, recordedDate) {
     const user = this.currentUser();
     const { level, id } = this.scopeFor(user);
     const template = this.templateForSubmit(type);
     const now = Date.now();
-    const period = frequency === "weekly" ? `Week of ${new Date(now).toLocaleDateString()}` : frequency === "monthly" ? monthYearDisplay() : `${eventName || "Programme"} — ${new Date(now).toLocaleDateString()}`;
+    const recordedDateActual = todayISODate();
+    const effectiveDate = recordedDate || recordedDateActual;
+    const dateEdited = effectiveDate !== recordedDateActual;
+    const dateObj = (() => { const [y, m, d] = effectiveDate.split("-").map(Number); return new Date(y, (m || 1) - 1, d || 1); })();
+    const period = frequency === "weekly" ? `Week of ${dateObj.toLocaleDateString()}` : frequency === "monthly" ? dateObj.toLocaleDateString(undefined, { year: "numeric", month: "long" }) : frequency === "annual" ? `Year ${dateObj.getFullYear()}` : `${eventName || "Programme"} — ${dateObj.toLocaleDateString()}`;
     const editId = this.editingReportId;
     await this.updateOrg((o) => {
       const fieldsSnapshot = [...(template ? template.fields : []), ...customFields];
       if (editId) {
         const r = o.reports.find((x) => x.id === editId);
-        if (r) { r.data = values; r.frequency = frequency; r.eventName = eventName; r.period = period; r.fieldsSnapshot = fieldsSnapshot; r.editedAt = now; }
+        if (r) { r.data = values; r.frequency = frequency; r.eventName = eventName; r.period = period; r.fieldsSnapshot = fieldsSnapshot; r.editedAt = now; r.recordedDateActual = recordedDateActual; r.recordedDate = effectiveDate; r.recordedDateEdited = dateEdited; }
       } else {
         const regNo = String(o.reports.length + 1).padStart(4, "0");
         o.reports.push({
           id: uid(), ownerLevel: level, ownerId: id, type,
           submittedBy: user.id, submitterName: user.name, position: user.position,
           period, frequency, eventName, data: values, fieldsSnapshot,
+          recordedDateActual, recordedDate: effectiveDate, recordedDateEdited: dateEdited,
           docHtmlSnapshot: template ? template.docHtml : null, docFileNameSnapshot: template ? template.docFileName : null,
           submittedAt: now, regNo,
         });
@@ -995,7 +1002,7 @@ function renderLanding() {
               ["An IT admin sets up the parish", "one account, once — registers the parish, then manages members and templates."],
               ["A president registers each local", "under the parish before that local's officers can join."],
               ["Local &amp; parish executives register", "choosing their position — secretary, financial secretary, treasurer, and so on."],
-              ["Secretaries &amp; treasurers fill in reports", "weekly, monthly, or whenever a programme is held — the date is recorded automatically."],
+              ["Secretaries &amp; treasurers fill in reports", "weekly, monthly, annually, or for the current programme — with the date you record."],
               ["The president reviews &amp; downloads a PDF", "read only, signatures included, ready to print."],
             ].map(([b, rest], i) => `<li class="row gap-3"><span class="cra-mono font-semibold" style="color:var(--gold)">${String(i + 1).padStart(2, "0")}</span><span><b>${b}</b> ${rest}</span></li>`).join("")}
           </ol>
@@ -1450,6 +1457,7 @@ function reportViewModalHtml(report) {
           <div class="text-xs" style="color:var(--ink-soft)">${esc(ctx.parishName)}${ctx.localName ? ` · ${esc(ctx.localName)}` : ""}</div>
           <div class="text-sm font-semibold mt-1">Submitted by ${esc(report.submitterName)} · ${esc(report.position)}</div>
           <div class="text-xs" style="color:var(--ink-soft)">${new Date(report.submittedAt).toLocaleString()}</div>
+          ${report.recordedDate ? `<div class="text-xs mt-1" style="color:var(--ink-soft)">Date recorded: ${displayDateFromISO(report.recordedDate)}${report.recordedDateEdited ? ` <span style="color:var(--gold)">(edited — actually logged ${displayDateFromISO(report.recordedDateActual)})</span>` : ""}</div>` : ""}
           ${submitter && submitter.signatureDataUrl ? `<img class="sig-thumb mt-2" src="${submitter.signatureDataUrl}" />` : ""}
         </div>
         <div class="space-y-3">
@@ -1570,9 +1578,10 @@ function submitReportFormHtml(type) {
       ${fieldWrap("How often is this report?", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
         <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option>
         <option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option>
-        <option value="event" ${frequency === "event" ? "selected" : ""}>Whenever a programme is held</option>
+        <option value="annual" ${frequency === "annual" ? "selected" : ""}>Annual</option>
+        <option value="event" ${frequency === "event" ? "selected" : ""}>Current programme</option>
       </select>`)}
-      <div><label class="cra-label">Date recorded</label><div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">${todayDisplay()}</div></div>
+      ${fieldWrap("Date recorded", `<input id="submit-date-recorded" class="cra-input" type="date" value="${esc(editingReport && editingReport.recordedDate ? editingReport.recordedDate : todayISODate())}" />`, "Defaults to today — edit it if this report covers a different date.")}
     </div>
     <div id="submit-event-wrap" style="display:${frequency === "event" ? "block" : "none"}">
       ${fieldWrap("Programme / event name", `<input id="submit-eventName" class="cra-input" placeholder="e.g. Diocesan Prayer Rally" value="${esc(eventName || "")}" />`)}
@@ -1650,12 +1659,13 @@ function handleSubmitReport(e, type) {
   e.preventDefault();
   const template = App.templateForSubmit(type);
   const frequency = document.getElementById("submit-frequency").value;
+  const recordedDate = document.getElementById("submit-date-recorded").value || todayISODate();
   const eventNameEl = document.getElementById("submit-eventName");
   const eventName = eventNameEl ? eventNameEl.value : "";
   const values = {};
   [...template.fields, ...submitCustomFields].forEach((f) => { const el = e.target.querySelector(`[name="${f.id}"]`); if (el) values[f.id] = el.value; });
   const customFieldsCopy = submitCustomFields.map((f) => ({ ...f }));
-  App.submitReport(type, values, frequency, eventName, customFieldsCopy);
+  App.submitReport(type, values, frequency, eventName, customFieldsCopy, recordedDate);
   submitFormValues = {}; submitCustomFields = [];
   return false;
 }
@@ -1810,7 +1820,7 @@ function overviewPanelHtml(ctx) {
     cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('reports')">${icon("eye", 18, "")}<div class="font-semibold mb-1 mt-2">Review submitted reports</div><p class="text-sm" style="color:var(--ink-soft)">Read and download a filled PDF, ready to print.</p></button>`;
   }
   reportTypes.forEach((type) => {
-    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.goSubmit('${type}')">${icon(REPORT_TYPE_ICON[type], 18, "")}<div class="font-semibold mb-1 mt-2">Submit ${reportTypeLabel(type).toLowerCase()}</div><p class="text-sm" style="color:var(--ink-soft)">Weekly, monthly, or whenever a programme is held.</p></button>`;
+    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.goSubmit('${type}')">${icon(REPORT_TYPE_ICON[type], 18, "")}<div class="font-semibold mb-1 mt-2">Submit ${reportTypeLabel(type).toLowerCase()}</div><p class="text-sm" style="color:var(--ink-soft)">Weekly, monthly, annual, or current programme.</p></button>`;
   });
   cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('structure')">${icon("users", 18, "")}<div class="font-semibold mb-1 mt-2">View the structure</div><p class="text-sm" style="color:var(--ink-soft)">See how ${user.level === "parish" ? "your parish and its locals" : "your local"} are organised.</p></button>`;
   cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('profile')">${icon("pen", 18, "")}<div class="font-semibold mb-1 mt-2">My profile &amp; signature</div><p class="text-sm" style="color:var(--ink-soft)">Upload your signature for reports and PDFs.</p></button>`;
