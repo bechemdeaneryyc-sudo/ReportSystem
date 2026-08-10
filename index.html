@@ -864,6 +864,15 @@ const App = {
       return o;
     });
   },
+  // IT admin only — removes a submitted report entirely (e.g. submitted in error,
+  // duplicate, or a test report). This can't be undone, so the button confirms first.
+  async removeReport(reportId) {
+    this.selectedReportIds.delete(reportId);
+    await this.updateOrg((o) => {
+      o.reports = o.reports.filter((r) => r.id !== reportId);
+      return o;
+    });
+  },
   async sendMemberResetEmail(userId) {
     const u = this.org.users.find((x) => x.id === userId);
     if (!u) return;
@@ -1728,7 +1737,7 @@ function handleSubmitReport(e, type) {
 /*  Reports list                                                          */
 /* ==================================================================== */
 
-function reportsTableHtml(reports, showLocal, allowEdit) {
+function reportsTableHtml(reports, showLocal, allowEdit, allowDelete) {
   if (reports.length === 0) return emptyState("file", "No reports submitted yet", "Once your executives submit reports, they'll be listed here for review and download.");
   const user = App.currentUser();
   const ids = reports.map((r) => r.id);
@@ -1753,7 +1762,11 @@ function reportsTableHtml(reports, showLocal, allowEdit) {
       <td class="px-4 py-3">${esc(r.submitterName)} <span style="color:var(--ink-soft)">· ${esc(r.position)}</span></td>
       <td class="px-4 py-3">${esc(r.period || "—")}${r.editedAt ? ` <span class="text-xs" style="color:var(--ink-soft)">(edited)</span>` : ""}</td>
       <td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${new Date(r.submittedAt).toLocaleDateString()}</td>
-      <td class="px-4 py-3 text-right"><button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.viewReport('${r.id}')">${icon("eye", 13)} View</button>${allowEdit && r.submittedBy === user.id ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.editReport('${r.id}')">${icon("upload", 13)} Edit</button>` : ""}</td>
+      <td class="px-4 py-3 text-right">
+        <button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.viewReport('${r.id}')">${icon("eye", 13)} View</button>
+        ${allowEdit && r.submittedBy === user.id ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.editReport('${r.id}')">${icon("upload", 13)} Edit</button>` : ""}
+        ${allowDelete ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" style="color:var(--wine)" onclick="if(confirm('Delete report ${esc(r.regNo)} from ${esc(r.submitterName)}? This can\\'t be undone.')) App.removeReport('${r.id}')">${icon("trash", 13)} Delete</button>` : ""}
+      </td>
     </tr>`).join("")}</tbody>
   </table></div></div>`;
 }
@@ -2057,8 +2070,8 @@ function renderApp() {
     content += `<div class="space-y-5">${templateEditorHtml("program")}${templateEditorHtml("meeting")}${templateEditorHtml("financial")}</div>`;
   } else if (App.view === "reports" && isAdmin) {
     const allReports = org.reports.map((r) => { const l = org.locals.find((x) => x.id === r.ownerId); return { ...r, localName: l ? l.name : null }; });
-    content = pageHeader("Read only", "All reports", "Every report submitted across the parish and its locals.");
-    content += reportsTableHtml(allReports, true);
+    content = pageHeader("Admin", "All reports", "Every report submitted across the parish and its locals. You can delete a report if it was submitted in error.");
+    content += reportsTableHtml(allReports, true, false, true);
   } else if (App.view === "reports" && isPresident && user.level === "local") {
     content = pageHeader("Read only", "Reports submitted to you", "You can review and download these as a filled PDF.");
     content += reportsTableHtml(myOwnReports, false);
