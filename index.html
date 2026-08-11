@@ -236,8 +236,27 @@ function authErrorMessage(e) {
   if (code === "auth/invalid-email") return "That doesn't look like a valid email address.";
   if (code === "auth/too-many-requests") return "Too many attempts — please wait a moment and try again.";
   if (code === "auth/network-request-failed") return "Network error — check your connection and try again.";
+  if (code === "auth/invalid-phone-number") return "That doesn't look like a valid phone number — include the country code, e.g. +233…";
+  if (code === "auth/credential-already-in-use" || code === "auth/phone-number-already-exists") return "That phone number is already linked to a different account.";
+  if (code === "auth/invalid-verification-code") return "That code doesn't match — check it and try again.";
+  if (code === "auth/code-expired") return "That code has expired — request a new one.";
   return (e && e.message) || "Something went wrong. Please try again.";
 }
+
+// Phone verification (linking a number, or signing in with one to reset a password)
+// needs a reCAPTCHA check. Firebase renders it invisibly into the given container.
+let recaptchaVerifiers = {};
+function getRecaptchaVerifier(containerId) {
+  if (!firebaseAuth) return null;
+  if (recaptchaVerifiers[containerId]) return recaptchaVerifiers[containerId];
+  const v = new firebase.auth.RecaptchaVerifier(containerId, { size: "invisible" });
+  recaptchaVerifiers[containerId] = v;
+  return v;
+}
+function clearRecaptchaVerifier(containerId) {
+  if (recaptchaVerifiers[containerId]) { try { recaptchaVerifiers[containerId].clear(); } catch (e) {} delete recaptchaVerifiers[containerId]; }
+}
+let pendingOtpConfirmation = null;
 
 /* Firestore rules require a signed-in user (see rules below). A brand-new    */
 /* visitor isn't signed in yet, so before the very first read we sign them   */
@@ -511,6 +530,8 @@ const App = {
   forgotEmail: "",
   forgotStatus: "idle",
   forgotError: "",
+  smsReset: { active: false, step: "phone", phone: "", code: "", newPassword: "", status: "idle", error: "" },
+  phoneVerify: { active: false, step: "phone", phone: "", code: "", status: "idle", error: "" },
   register: { mode: null, step: 0, name: "", email: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" },
   view: "overview",
   sidebarOpen: false,
@@ -530,7 +551,7 @@ const App = {
   bulkPdfBuilding: false,
   selectedReportIds: new Set(),
   showAddMember: false,
-  addMemberDraft: { level: "local", localId: "", position: "", name: "", email: "", password: "" },
+  addMemberDraft: { level: "local", localId: "", position: "", name: "", email: "", phone: "", password: "" },
   parishSettingsDraft: null,
 
   async init() {
@@ -552,7 +573,7 @@ const App = {
 
   goLanding() { this.screen = "landing"; this.render(); },
   goLogin() { this.loginError = ""; this.screen = "login"; this.render(); },
-  goRegister() { this.register = { mode: null, step: 0, name: "", email: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" }; this.screen = "register"; this.render(); },
+  goRegister() { this.register = { mode: null, step: 0, name: "", email: "", phone: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" }; this.screen = "register"; this.render(); },
 
   async doLogin(email, password) {
     this.loginError = "";
@@ -591,6 +612,75 @@ const App = {
     this.render();
   },
 
+  // --- Reset password via SMS, for anyone who has verified & linked a phone number ---
+  goSmsReset() { this.forgotMode = false; this.smsReset = { active: true, step: "phone", phone: "", code: "", newPassword: "", status: "idle", error: "" }; this.render(); },
+  cancelSmsReset() { clearRecaptchaVerifier("sms-reset-recaptcha"); this.smsReset.active = false; this.render(); },
+  async sendSmsResetOtp(phone) {
+    const s = this.smsReset;
+    if (!firebaseAuth) { s.status = "unavailable"; this.render(); return; }
+    const clean = phone.trim();
+    if (!clean) { s.status = "error"; s.error = "Enter the phone number on your account."; this.render(); return; }
+    s.status = "sending"; s.error = ""; this.render();
+    try {
+      const verifier = getRecaptchaVerifier("sms-reset-recaptcha");
+      pendingOtpConfirmation = await firebaseAuth.signInWithPhoneNumber(clean, verifier);
+      s.phone = clean; s.step = "code"; s.status = "idle";
+    } catch (e) { s.status = "error"; s.error = authErrorMessage(e); clearRecaptchaVerifier("sms-reset-recaptcha"); }
+    this.render();
+  },
+  async confirmSmsResetOtp(code) {
+    const s = this.smsReset;
+    if (!pendingOtpConfirmation) { s.status = "error"; s.error = "That code has expired — request a new one."; this.render(); return; }
+    s.status = "sending"; s.error = ""; this.render();
+    try {
+      const cred = await pendingOtpConfirmation.confirm(code.trim());
+      const u = this.org.users.find((x) => x.id === cred.user.uid);
+      if (!u) { await firebaseAuth.signOut(); s.status = "error"; s.error = "That number isn't linked to an account in this register."; this.render(); return; }
+      s.step = "password"; s.status = "idle";
+    } catch (e) { s.status = "error"; s.error = authErrorMessage(e); }
+    this.render();
+  },
+  async submitSmsResetPassword(newPassword) {
+    const s = this.smsReset;
+    if (!newPassword || newPassword.length < 6) { s.status = "error"; s.error = "Password should be at least 6 characters."; this.render(); return; }
+    s.status = "sending"; s.error = ""; this.render();
+    try {
+      await firebaseAuth.currentUser.updatePassword(newPassword);
+      const u = this.org.users.find((x) => x.id === firebaseAuth.currentUser.uid);
+      clearRecaptchaVerifier("sms-reset-recaptcha"); pendingOtpConfirmation = null;
+      if (u) { this.sessionUserId = u.id; await saveSession(u.id); this.smsReset.active = false; this.view = "overview"; this.screen = "app"; this.render(); }
+      else { await firebaseAuth.signOut(); s.status = "error"; s.error = "Something went wrong finding your account — please try logging in again."; this.render(); }
+    } catch (e) { s.status = "error"; s.error = authErrorMessage(e); this.render(); }
+  },
+
+  // --- Add/verify a phone number from the profile page (links it for SMS reset later) ---
+  startPhoneVerify() { const u = this.currentUser(); this.phoneVerify = { active: true, step: "phone", phone: u.phone || "", code: "", status: "idle", error: "" }; this.render(); },
+  cancelPhoneVerify() { clearRecaptchaVerifier("profile-phone-recaptcha"); this.phoneVerify.active = false; this.render(); },
+  async sendProfilePhoneOtp(phone) {
+    const s = this.phoneVerify;
+    if (!firebaseAuth) { s.status = "unavailable"; this.render(); return; }
+    const clean = phone.trim();
+    if (!clean) { s.status = "error"; s.error = "Enter a phone number."; this.render(); return; }
+    s.status = "sending"; s.error = ""; this.render();
+    try {
+      const verifier = getRecaptchaVerifier("profile-phone-recaptcha");
+      pendingOtpConfirmation = await firebaseAuth.currentUser.linkWithPhoneNumber(clean, verifier);
+      s.phone = clean; s.step = "code"; s.status = "idle";
+    } catch (e) { s.status = "error"; s.error = authErrorMessage(e); clearRecaptchaVerifier("profile-phone-recaptcha"); }
+    this.render();
+  },
+  async confirmProfilePhoneOtp(code) {
+    const s = this.phoneVerify;
+    if (!pendingOtpConfirmation) { s.status = "error"; s.error = "That code has expired — request a new one."; this.render(); return; }
+    s.status = "sending"; s.error = ""; this.render();
+    try {
+      await pendingOtpConfirmation.confirm(code.trim());
+      pendingOtpConfirmation = null; clearRecaptchaVerifier("profile-phone-recaptcha");
+      await this.updateProfile({ phone: s.phone, phoneVerified: true });
+      s.active = false; this.render();
+    } catch (e) { s.status = "error"; s.error = authErrorMessage(e); this.render(); }
+  },
+
   hasAdmin() { return this.org.users.some((u) => u.isAdmin); },
 
   async createParish() {
@@ -605,7 +695,7 @@ const App = {
     const parishId = uid();
     await this.updateOrg((o) => {
       o.parishes.push({ id: parishId, name: r.parishName, location: r.parishLocation, presidentId: userId, logoDataUrl: null, createdAt: Date.now() });
-      o.users.push({ id: userId, name: r.name, email: r.email, ...(firebaseAuth ? {} : { password: r.password }), level: "parish", position: "President", parishId, localId: null, createdAt: Date.now() });
+      o.users.push({ id: userId, name: r.name, email: r.email, phone: r.phone.trim(), ...(firebaseAuth ? {} : { password: r.password }), level: "parish", position: "President", parishId, localId: null, createdAt: Date.now() });
       return o;
     });
     this.sessionUserId = userId; await saveSession(userId);
@@ -627,7 +717,7 @@ const App = {
         parishId = uid();
         o.parishes.push({ id: parishId, name: r.parishName || "New Parish", location: r.parishLocation || "", presidentId: null, logoDataUrl: null, createdAt: Date.now() });
       }
-      o.users.push({ id: userId, name: r.name, email: r.email, ...(firebaseAuth ? {} : { password: r.password }), level: "admin", isAdmin: true, position: "IT Admin", parishId, localId: null, createdAt: Date.now() });
+      o.users.push({ id: userId, name: r.name, email: r.email, phone: r.phone.trim(), ...(firebaseAuth ? {} : { password: r.password }), level: "admin", isAdmin: true, position: "IT Admin", parishId, localId: null, createdAt: Date.now() });
       return o;
     });
     this.sessionUserId = userId; await saveSession(userId);
@@ -645,7 +735,7 @@ const App = {
       catch (e) { r.error = authErrorMessage(e); this.render(); return; }
     } else { userId = uid(); }
     await this.updateOrg((o) => {
-      o.users.push({ id: userId, name: r.name, email: r.email, ...(firebaseAuth ? {} : { password: r.password }), level: r.level, position: r.position, parishId: r.parishId, localId: r.level === "local" ? r.localId : null, termOpeningBalance: "", createdAt: Date.now() });
+      o.users.push({ id: userId, name: r.name, email: r.email, phone: r.phone.trim(), ...(firebaseAuth ? {} : { password: r.password }), level: r.level, position: r.position, parishId: r.parishId, localId: r.level === "local" ? r.localId : null, termOpeningBalance: "", createdAt: Date.now() });
       if (r.level === "local" && r.position === "President") { const l = o.locals.find((x) => x.id === r.localId); if (l) l.presidentId = userId; }
       if (r.level === "parish" && r.position === "President") { const p = o.parishes.find((x) => x.id === r.parishId); if (p) p.presidentId = userId; }
       return o;
@@ -902,7 +992,7 @@ const App = {
       } catch (e) { alert(authErrorMessage(e)); return; }
     } else { userId = uid(); }
     await this.updateOrg((o) => {
-      o.users.push({ id: userId, name: d.name, email: d.email, ...(firebaseAuth ? {} : { password: d.password }), level: d.level, position: d.position, parishId: admin.parishId, localId: d.level === "local" ? d.localId : null, termOpeningBalance: "", createdAt: Date.now() });
+      o.users.push({ id: userId, name: d.name, email: d.email, phone: (d.phone || "").trim(), ...(firebaseAuth ? {} : { password: d.password }), level: d.level, position: d.position, parishId: admin.parishId, localId: d.level === "local" ? d.localId : null, termOpeningBalance: "", createdAt: Date.now() });
       if (d.position === "President") {
         if (d.level === "local") { const l = o.locals.find((x) => x.id === d.localId); if (l) l.presidentId = userId; }
         else { const p = o.parishes.find((x) => x.id === admin.parishId); if (p) p.presidentId = userId; }
@@ -1028,6 +1118,7 @@ function renderLanding() {
 /* ==================================================================== */
 
 function renderLogin() {
+  if (App.smsReset.active) return renderSmsReset();
   if (App.forgotMode) return renderForgotPassword();
   return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
     <div class="w-full max-w-md cra-fade-in">
@@ -1074,11 +1165,39 @@ function renderForgotPassword() {
           <div><h2 class="cra-display text-xl">Reset your password</h2><p class="text-xs" style="color:var(--ink-soft)">We'll email you a link to choose a new one</p></div>
         </div>
         ${body}
+        ${firebaseAuth && s !== "sent" ? `<p class="text-sm text-center mt-4" style="color:var(--ink-soft)">Have a verified phone number instead? <button class="link-btn" onclick="App.goSmsReset()">Reset by SMS</button></p>` : ""}
       </div>
     </div>
   </div>`;
 }
 function handleForgotSubmit(e) { e.preventDefault(); App.forgotEmail = document.getElementById("forgot-email").value; App.sendPasswordReset(App.forgotEmail); return false; }
+
+function renderSmsReset() {
+  const s = App.smsReset;
+  let body;
+  if (s.step === "password") {
+    body = `<div class="space-y-4">
+      <p class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Number verified — choose a new password.</p>
+      ${fieldWrap("New password", `<input id="sms-reset-password" class="cra-input" type="password" minlength="6" placeholder="••••••••" />`)}
+      ${s.status === "error" ? errorNote(s.error) : ""}
+      ${btnHtml({ variant: "primary", label: s.status === "sending" ? "Saving…" : "Save new password", extraClass: "w-full", attrs: `onclick="App.submitSmsResetPassword(document.getElementById('sms-reset-password').value)" ${s.status === "sending" ? "disabled" : ""}` })}
+    </div>`;
+  } else {
+    body = phoneVerifyInlineHtml(s, "sms-reset-recaptcha", { sendFn: "App.sendSmsResetOtp", confirmFn: "App.confirmSmsResetOtp", cancelFn: "App.cancelSmsReset" });
+  }
+  return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
+    <div class="w-full max-w-md cra-fade-in">
+      <button class="row items-center gap-1 text-sm mb-6" style="color:var(--ink-soft);cursor:pointer" onclick="App.cancelSmsReset()">${icon("arrowLeft", 14)} Back to log in</button>
+      <div class="cra-card cra-card-accent p-7">
+        <div class="row items-center gap-2 mb-5">
+          <div class="cra-seal cra-display text-sm">†</div>
+          <div><h2 class="cra-display text-xl">Reset by SMS</h2><p class="text-xs" style="color:var(--ink-soft)">Only works for a phone number you've already verified on your profile</p></div>
+        </div>
+        ${body}
+      </div>
+    </div>
+  </div>`;
+}
 
 /* ==================================================================== */
 /*  Registration wizard                                                  */
@@ -1140,6 +1259,7 @@ function renderRegister() {
         <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details</div>
         ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
         ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+        ${fieldWrap("Phone number", `<input id="reg-phone" class="cra-input" type="tel" placeholder="e.g. 024 123 4567" value="${esc(r.phone)}" />`, "Optional now — lets you verify it later for SMS-based password reset.")}
         ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
         ${r.error ? errorNote(r.error) : ""}
         ${btnHtml({ variant: "primary", label: "Register as IT Admin", extraClass: "w-full", attrs: `type="submit"` })}
@@ -1156,6 +1276,7 @@ function renderRegister() {
         <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details · you'll be registered as President</div>
         ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
         ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+        ${fieldWrap("Phone number", `<input id="reg-phone" class="cra-input" type="tel" placeholder="e.g. 024 123 4567" value="${esc(r.phone)}" />`, "Optional now — lets you verify it later for SMS-based password reset.")}
         ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
         ${r.error ? errorNote(r.error) : ""}
         ${btnHtml({ variant: "primary", label: "Register parish &amp; create my account", extraClass: "w-full", attrs: `type="submit"` })}
@@ -1191,6 +1312,7 @@ function renderRegister() {
           <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details</div>
           ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
           ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+          ${fieldWrap("Phone number", `<input id="reg-phone" class="cra-input" type="tel" placeholder="e.g. 024 123 4567" value="${esc(r.phone)}" />`, "Optional now — lets you verify it later for SMS-based password reset.")}
           ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
           ${r.error ? errorNote(r.error) : ""}
           ${btnHtml({ variant: "primary", label: "Complete registration", extraClass: "w-full", attrs: `type="submit" ${posOptions.length === 0 ? "disabled" : ""}` })}
@@ -1210,6 +1332,8 @@ function pickRegLocal(id) { App.register.localId = id; App.register.position = "
 function syncRegIdentity() {
   App.register.name = document.getElementById("reg-name").value;
   App.register.email = document.getElementById("reg-email").value;
+  const phoneEl = document.getElementById("reg-phone");
+  App.register.phone = phoneEl ? phoneEl.value : "";
   App.register.password = document.getElementById("reg-password").value;
 }
 function handleNewParishSubmit(e) {
@@ -1842,6 +1966,7 @@ function addMemberModalHtml() {
         ${(d.level === "parish" || d.localId) ? fieldWrap("Position", `<select class="cra-select" onchange="App.addMemberDraft.position=this.value"><option value="">Select position…</option>${posOptions.map((p) => `<option value="${p}" ${d.position === p ? "selected" : ""}>${p}</option>`).join("")}</select>`) : ""}
         ${fieldWrap("Full name", `<input id="addmember-name" class="cra-input" required />`)}
         ${fieldWrap("Email", `<input id="addmember-email" class="cra-input" type="email" required />`)}
+        ${fieldWrap("Phone number", `<input id="addmember-phone" class="cra-input" type="tel" placeholder="Optional" />`)}
         ${fieldWrap("Temporary password", `<input id="addmember-password" class="cra-input" type="text" required minlength="6" placeholder="They can log in with this" />`)}
         ${btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", extraClass: "w-full", attrs: `type="submit"` })}
       </form></div>
@@ -1852,6 +1977,7 @@ function handleAddMemberSubmit(e) {
   e.preventDefault();
   App.addMemberDraft.name = document.getElementById("addmember-name").value;
   App.addMemberDraft.email = document.getElementById("addmember-email").value;
+  App.addMemberDraft.phone = document.getElementById("addmember-phone").value;
   App.addMemberDraft.password = document.getElementById("addmember-password").value;
   App.addMember(); return false;
 }
@@ -1904,7 +2030,7 @@ function overviewPanelHtml(ctx) {
 function membersViewHtml() {
   const admin = App.currentUser();
   const members = App.org.users.filter((u) => u.parishId === admin.parishId);
-  return `${pageHeader("IT Admin", "Members", "Everyone registered under this parish and its locals.", btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", attrs: `onclick="App.showAddMember=true; App.addMemberDraft={level:'local',localId:'',position:'',name:'',email:'',password:''}; App.render()"` }))}
+  return `${pageHeader("IT Admin", "Members", "Everyone registered under this parish and its locals.", btnHtml({ variant: "primary", label: "Add member", iconName: "userPlus", attrs: `onclick="App.showAddMember=true; App.addMemberDraft={level:'local',localId:'',position:'',name:'',email:'',phone:'',password:''}; App.render()"` }))}
   <div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
     <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Name</th><th class="px-4 py-2 cra-label">Email</th><th class="px-4 py-2 cra-label">Scope</th><th class="px-4 py-2 cra-label">Position</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
     <tbody>${members.map((u) => {
@@ -1935,6 +2061,7 @@ function handleParishSettingsSubmit(e) { e.preventDefault(); App.saveParishSetti
 function profileViewHtml() {
   const user = App.currentUser();
   const isFinancial = user.position === "Financial Secretary" || user.position === "Treasurer";
+  const pv = App.phoneVerify;
   return `${pageHeader("Account", "My profile", "Your signature appears on reports you submit and on the president's downloaded PDFs.")}
   <div class="cra-card cra-card-accent p-5 max-w-md space-y-5">
     <div><div class="cra-label mb-1">Name</div><div class="text-sm font-medium">${esc(user.name)}</div></div>
@@ -1953,9 +2080,57 @@ function profileViewHtml() {
       <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report. Once you submit that report, this amount locks and your balance updates automatically after that.</p>
       ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
     </form>`) : ""}
+  </div>
+  <div class="cra-card cra-card-accent p-5 max-w-md space-y-3 mt-5">
+    <div class="cra-label mb-1">Phone number</div>
+    ${pv.active ? phoneVerifyInlineHtml(pv, "profile-phone-recaptcha", { sendFn: "App.sendProfilePhoneOtp", confirmFn: "App.confirmProfilePhoneOtp", cancelFn: "App.cancelPhoneVerify" }) : `
+      <form onsubmit="return handlePhoneSaveSubmit(event)" class="row gap-2 items-start">
+        <div class="flex-1"><input id="profile-phone" class="cra-input" type="tel" placeholder="e.g. +233 24 123 4567" value="${esc(user.phone || "")}" /></div>
+        ${btnHtml({ variant: "secondary", label: "Save", attrs: `type="submit"` })}
+      </form>
+      ${user.phone ? (user.phoneVerified
+        ? `<p class="text-xs row items-center gap-1" style="color:var(--green)">${icon("check", 12)} Verified — you can use this number to reset your password by SMS.</p>`
+        : `<p class="text-xs" style="color:var(--ink-soft)">Not verified yet — you can't reset your password by SMS until you verify it. <button class="link-btn" onclick="App.startPhoneVerify()">Verify now</button></p>`)
+        : `<p class="text-xs" style="color:var(--ink-soft)">Add a number, then verify it so you can reset your password by SMS if you ever forget it.</p>`}
+    `}
   </div>`;
 }
 function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
+function handlePhoneSaveSubmit(e) {
+  e.preventDefault();
+  const val = document.getElementById("profile-phone").value.trim();
+  const user = App.currentUser();
+  // Changing the number invalidates any previous SMS-verification link.
+  App.updateProfile({ phone: val, phoneVerified: val && val === user.phone ? user.phoneVerified : false });
+  return false;
+}
+// Shared inline "enter phone → enter code" widget used by both the profile phone-verify
+// flow and the SMS forgot-password flow. `cfg` supplies the App method names to call.
+function phoneVerifyInlineHtml(state, recaptchaId, cfg) {
+  if (state.step === "phone") {
+    return `<div class="space-y-2">
+      ${fieldWrap("Phone number", `<input id="pv-phone-${recaptchaId}" class="cra-input" type="tel" placeholder="e.g. +233 24 123 4567" value="${esc(state.phone)}" />`, "Include the country code (e.g. +233 for Ghana).")}
+      ${state.status === "error" ? errorNote(state.error) : ""}
+      <div id="${recaptchaId}"></div>
+      <div class="row gap-2">
+        ${btnHtml({ variant: "primary", label: state.status === "sending" ? "Sending code…" : "Send code", attrs: `onclick="${cfg.sendFn}(document.getElementById('pv-phone-${recaptchaId}').value)" ${state.status === "sending" ? "disabled" : ""}` })}
+        ${btnHtml({ variant: "ghost", label: "Cancel", attrs: `onclick="${cfg.cancelFn}()"` })}
+      </div>
+    </div>`;
+  }
+  if (state.step === "code") {
+    return `<div class="space-y-2">
+      <p class="text-xs" style="color:var(--ink-soft)">We sent a code to ${esc(state.phone)}.</p>
+      ${fieldWrap("Verification code", `<input id="pv-code-${recaptchaId}" class="cra-input" inputmode="numeric" placeholder="6-digit code" />`)}
+      ${state.status === "error" ? errorNote(state.error) : ""}
+      <div class="row gap-2">
+        ${btnHtml({ variant: "primary", label: state.status === "sending" ? "Verifying…" : "Verify", attrs: `onclick="${cfg.confirmFn}(document.getElementById('pv-code-${recaptchaId}').value)" ${state.status === "sending" ? "disabled" : ""}` })}
+        ${btnHtml({ variant: "ghost", label: "Cancel", attrs: `onclick="${cfg.cancelFn}()"` })}
+      </div>
+    </div>`;
+  }
+  return "";
+}
 
 function rosterAdminViewHtml() {
   const user = App.currentUser();
