@@ -874,6 +874,21 @@ const App = {
     setTimeout(() => { if (this.templateSavedFlash === type) { this.templateSavedFlash = null; this.render(); } }, 1800);
   },
   clearDocxUpload(type) { this.templateDraftDoc[type] = null; this.templateUploadFlash = null; this.render(); },
+  // Removes this scope's template entirely (not just its fields) — the questions
+  // disappear from the editor and from the submit form immediately. Reports already
+  // submitted keep their own saved copy of the questions, so past records are untouched.
+  async removeTemplate(type) {
+    const { level, id } = this.activeTemplateScope();
+    await this.updateOrg((o) => { o.templates = o.templates.filter((t) => !(t.ownerLevel === level && t.ownerId === id && t.type === type)); return o; });
+    this.templateDraft[type] = []; this.templateDraftDoc[type] = null; this.templateDraftInput[type] = { label: "", type: "text" };
+    this.templateSavedFlash = null; this.templateUploadFlash = null; this.render();
+  },
+  // IT admin only — wipes every template across every parish/local scope and type in one go.
+  async removeAllTemplates() {
+    await this.updateOrg((o) => { o.templates = []; return o; });
+    ["program", "meeting", "financial"].forEach((t) => { this.templateDraft[t] = []; this.templateDraftDoc[t] = null; this.templateDraftInput[t] = { label: "", type: "text" }; });
+    this.templateSavedFlash = null; this.templateUploadFlash = null; this.render();
+  },
 
   goSubmit(type) {
     this.submitType = type; this.editingReportId = null;
@@ -1699,6 +1714,7 @@ function templateEditorHtml(type) {
     <div class="row items-center gap-3 mt-4">
       ${btnHtml({ variant: "primary", label: "Save template", iconName: "upload", attrs: `onclick="App.saveTemplate('${type}')"` })}
       ${fields.length > 0 ? btnHtml({ variant: "ghost", label: App.pdfBuilding === "blank:" + type ? "Building PDF…" : "Download blank form (PDF)", iconName: "download", attrs: `onclick="downloadBlankTemplatePdf('${type}')" ${App.pdfBuilding === "blank:" + type ? "disabled" : ""}` }) : ""}
+      ${fields.length > 0 || doc ? btnHtml({ variant: "danger", label: "Remove template", iconName: "trash", attrs: `onclick="if(confirm('Remove the ${esc(reportTypeLabel(type)).toLowerCase()} template for this scope? All its questions will disappear from the editor and the submit form.')) App.removeTemplate('${type}')"` }) : ""}
       ${saved ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
     </div>
   </div>`;
@@ -2234,7 +2250,7 @@ function renderApp() {
       return `<div class="cra-card p-4"><div class="row items-center gap-2 mb-2">${icon("building", 15)}<span class="font-semibold">${esc(l.name)}</span></div><div class="text-xs mb-3" style="color:var(--ink-soft)">${esc(l.location)}</div><div class="row gap-2">${badge("violet", `${execCount} executive${execCount !== 1 ? "s" : ""}`)}${badge("green", `${reportCount} report${reportCount !== 1 ? "s" : ""}`)}${!l.presidentId ? badge("wine", "No president yet") : ""}</div></div>`;
     }).join("")}</div>`;
   } else if (App.view === "template" && (isPresident || isAdmin)) {
-    content = pageHeader("Report layout", "Report templates", "Lay out the fields your secretary and financial secretary/treasurer will fill in.");
+    content = pageHeader("Report layout", "Report templates", "Lay out the fields your secretary and financial secretary/treasurer will fill in.", isAdmin && org.templates.length > 0 ? btnHtml({ variant: "danger", label: "Remove all templates", iconName: "trash", attrs: `onclick="if(confirm('Remove every template across the whole parish and all its locals? All questions everywhere will disappear from every submit form until new templates are set up. This can\\'t be undone.')) App.removeAllTemplates()"` }) : "");
     if (isAdmin) {
       const scope = App.adminTemplateScope || App.scopeFor(user);
       content += `<div class="row wrap gap-2 mb-5">
