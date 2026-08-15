@@ -541,6 +541,7 @@ const App = {
   templateDraftInput: { program: { label: "", type: "text" }, meeting: { label: "", type: "text" }, financial: { label: "", type: "text" } },
   templateDraftDoc: { program: null, meeting: null, financial: null },
   templateSavedFlash: null,
+  headingSavedFlash: false,
   templateUploadFlash: null,
   adminTemplateScope: null,
   adminRosterScope: null,
@@ -782,6 +783,25 @@ const App = {
       return o;
     });
   },
+  // A single heading (e.g. "TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___") the admin
+  // sets once per scope — it applies as the default on every template (Program, Meeting,
+  // Financial) for that scope, but the secretary filling in a report can edit their own
+  // copy of it at submission time (e.g. to update the AGCM number each period).
+  async saveReportHeading(level, id, heading) {
+    await this.updateOrg((o) => {
+      if (level === "parish") { const p = o.parishes.find((x) => x.id === id); if (p) p.reportHeading = heading; }
+      else { const l = o.locals.find((x) => x.id === id); if (l) l.reportHeading = heading; }
+      return o;
+    });
+    this.headingSavedFlash = true; this.render();
+    setTimeout(() => { this.headingSavedFlash = false; this.render(); }, 1800);
+  },
+  getHeadingForScope(user) {
+    const { level, id } = this.scopeFor(user);
+    if (level === "parish") { const p = this.org.parishes.find((x) => x.id === id); return (p && p.reportHeading) || ""; }
+    const l = this.org.locals.find((x) => x.id === id);
+    return (l && l.reportHeading) || "";
+  },
 
   templateFor(type, scopeOverride) {
     const { level, id } = scopeOverride || this.activeTemplateScope();
@@ -897,7 +917,7 @@ const App = {
     this.view = "submit"; this.render();
   },
 
-  async submitReport(type, values, frequency, eventName, customFields, recordedDate) {
+  async submitReport(type, values, frequency, eventName, customFields, recordedDate, heading) {
     const user = this.currentUser();
     const { level, id } = this.scopeFor(user);
     const template = this.templateForSubmit(type);
@@ -912,13 +932,13 @@ const App = {
       const fieldsSnapshot = [...(template ? template.fields : []), ...customFields];
       if (editId) {
         const r = o.reports.find((x) => x.id === editId);
-        if (r) { r.data = values; r.frequency = frequency; r.eventName = eventName; r.period = period; r.fieldsSnapshot = fieldsSnapshot; r.editedAt = now; r.recordedDateActual = recordedDateActual; r.recordedDate = effectiveDate; r.recordedDateEdited = dateEdited; }
+        if (r) { r.data = values; r.frequency = frequency; r.eventName = eventName; r.period = period; r.fieldsSnapshot = fieldsSnapshot; r.editedAt = now; r.recordedDateActual = recordedDateActual; r.recordedDate = effectiveDate; r.recordedDateEdited = dateEdited; r.heading = heading || ""; }
       } else {
         const regNo = String(o.reports.length + 1).padStart(4, "0");
         o.reports.push({
           id: uid(), ownerLevel: level, ownerId: id, type,
           submittedBy: user.id, submitterName: user.name, position: user.position,
-          period, frequency, eventName, data: values, fieldsSnapshot,
+          period, frequency, eventName, data: values, fieldsSnapshot, heading: heading || "",
           recordedDateActual, recordedDate: effectiveDate, recordedDateEdited: dateEdited,
           docHtmlSnapshot: template ? template.docHtml : null, docFileNameSnapshot: template ? template.docFileName : null,
           submittedAt: now, regNo,
@@ -1474,6 +1494,7 @@ function buildFilledReportHtml(report, ctx) {
     <div style="font-family:'Fraunces',Georgia,serif;text-align:center;margin-bottom:18px">
       <div style="font-size:19px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${esc(ctx.parishName)}</div>
       ${ctx.localName ? `<div style="font-size:14px;color:#57536b">${esc(ctx.localName)}</div>` : ""}
+      ${report.heading ? `<div style="font-size:12.5px;font-style:italic;color:#57536b;margin-top:6px">${esc(report.heading)}</div>` : ""}
       <div style="font-size:12px;color:#57536b;margin-top:8px">${esc(reportTypeLabel(report.type))} &middot; ${isBlank ? "Blank template" : `Reg. No ${esc(report.regNo)}`}</div>
       ${isBlank ? `<div style="display:inline-block;margin-top:8px;padding:2px 10px;border:1px solid #a3382e;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:0.05em;color:#a3382e;text-transform:uppercase">Not yet submitted</div>` : ""}
     </div>
@@ -1596,7 +1617,7 @@ function buildBlankReportObject(type) {
   return {
     id: "blank", type, ownerLevel: level, ownerId: id,
     submittedBy: null, submitterName: "—", position: reportTypeLabel(type),
-    period: null, frequency: null, eventName: null,
+    period: null, frequency: null, eventName: null, heading: App.getHeadingForScope(user),
     data: {}, fieldsSnapshot: template.fields,
     docHtmlSnapshot: template.docHtml, docFileNameSnapshot: template.docFileName,
     submittedAt: Date.now(), regNo: "BLANK", isBlankTemplate: true,
@@ -1777,6 +1798,7 @@ function submitReportFormHtml(type) {
     <div><div class="cra-label mb-1">Balance carried into this report</div><div class="cra-display" style="font-size:1.35rem;font-weight:600">GHS ${fmtMoney(computedOpening)}</div><p class="text-xs mt-1" style="color:var(--ink-soft)">Fills in automatically below as your opening balance — enter income and expenditure and the closing balance updates itself.</p></div>
   </div>` : ""}
   <form class="cra-card cra-card-accent p-5 space-y-4" onsubmit="return handleSubmitReport(event,'${type}')">
+    ${fieldWrap("Report heading", `<input id="submit-heading" class="cra-input" placeholder="e.g. TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___" value="${esc(editingReport ? (editingReport.heading || "") : App.getHeadingForScope(user))}" />`, "Set by your IT admin as a default for every template — feel free to edit it for this report.")}
     <div class="grid sm-grid-2">
       ${fieldWrap("How often is this report?", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
         <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option>
@@ -1861,6 +1883,7 @@ function removeCustomSubmitField(id) { submitCustomFields = submitCustomFields.f
 function handleSubmitReport(e, type) {
   e.preventDefault();
   const template = App.templateForSubmit(type);
+  const heading = document.getElementById("submit-heading").value;
   const frequency = document.getElementById("submit-frequency").value;
   const recordedDate = document.getElementById("submit-date-recorded").value || todayISODate();
   const eventNameEl = document.getElementById("submit-eventName");
@@ -1868,7 +1891,7 @@ function handleSubmitReport(e, type) {
   const values = {};
   [...template.fields, ...submitCustomFields].forEach((f) => { const el = e.target.querySelector(`[name="${f.id}"]`); if (el) values[f.id] = el.value; });
   const customFieldsCopy = submitCustomFields.map((f) => ({ ...f }));
-  App.submitReport(type, values, frequency, eventName, customFieldsCopy, recordedDate);
+  App.submitReport(type, values, frequency, eventName, customFieldsCopy, recordedDate, heading);
   submitFormValues = {}; submitCustomFields = [];
   return false;
 }
@@ -2190,6 +2213,11 @@ function handleAdminRosterSubmit(e) {
   App.saveRoster(level, id, roster);
   return false;
 }
+function handleReportHeadingSubmit(e, level, id) {
+  e.preventDefault();
+  App.saveReportHeading(level, id, document.getElementById("report-heading-input").value);
+  return false;
+}
 
 /* ==================================================================== */
 /*  App shell                                                              */
@@ -2256,6 +2284,16 @@ function renderApp() {
       content += `<div class="row wrap gap-2 mb-5">
         <button class="cra-btn ${scope.level === "parish" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminTemplateScope('parish','${user.parishId}')">Parish executives</button>
         ${org.locals.filter((l) => l.parishId === user.parishId).map((l) => `<button class="cra-btn ${scope.level === "local" && scope.id === l.id ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminTemplateScope('local','${l.id}')">${esc(l.name)}</button>`).join("")}
+      </div>`;
+      const headingEntity = scope.level === "parish" ? org.parishes.find((p) => p.id === scope.id) : org.locals.find((l) => l.id === scope.id);
+      content += `<div class="cra-card cra-card-accent p-5 mb-5">
+        <div class="cra-label mb-1">Report heading</div>
+        <p class="text-xs mb-3" style="color:var(--ink-soft)">One heading, shared by every template (Programme, Meeting, Financial) for this scope — e.g. the AGCM number, venue, and dates. Secretaries can still edit their own copy of it when they submit a report.</p>
+        <form class="row gap-2 items-start" onsubmit="return handleReportHeadingSubmit(event,'${scope.level}','${scope.id}')">
+          <div class="flex-1"><input id="report-heading-input" class="cra-input" placeholder="e.g. TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___" value="${esc((headingEntity && headingEntity.reportHeading) || "")}" /></div>
+          ${btnHtml({ variant: "secondary", label: "Save", attrs: `type="submit"` })}
+          ${App.headingSavedFlash ? `<span class="text-sm row items-center gap-1 self-center" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
+        </form>
       </div>`;
     }
     content += `<div class="space-y-5">${templateEditorHtml("program")}${templateEditorHtml("meeting")}${templateEditorHtml("financial")}</div>`;
