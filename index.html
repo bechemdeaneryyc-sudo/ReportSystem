@@ -1606,16 +1606,39 @@ function buildFilledReportHtml(report, ctx) {
   </div>`;
 }
 
+// html2canvas measures the container's height before every image inside it has
+// necessarily finished decoding. If the watermark (or a parish logo) isn't ready yet,
+// that height can shift mid-capture and jsPDF ends up tacking on a stray blank page.
+// Waiting for every <img> to actually finish loading first avoids that.
+function waitForImagesToLoad(container) {
+  const imgs = Array.from(container.querySelectorAll("img"));
+  return Promise.all(imgs.map((img) => {
+    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+    return new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; });
+  }));
+}
+// Prepares an off-screen container for html2pdf: fixed position (so it never affects
+// visible layout), but with an explicit pixel width — without one, a position:fixed
+// element with no left/right pair can size unpredictably across browsers, which throws
+// off html2pdf's page-height math and is another common cause of stray blank pages.
+function makePdfContainer() {
+  const container = document.createElement("div");
+  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0"; container.style.width = "780px";
+  return container;
+}
+const PDF_HTML2CANVAS_OPTS = { scale: 2, backgroundColor: "#ffffff", windowWidth: 780 };
+const PDF_PAGEBREAK_OPTS = { mode: ["css", "legacy"], avoid: ["tr", "table"] };
+
 async function downloadReportPdf(reportId) {
   const report = App.org.reports.find((r) => r.id === reportId);
   const ctx = ctxForReport(report);
   App.pdfBuilding = reportId; App.render();
-  const container = document.createElement("div");
-  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
+  const container = makePdfContainer();
   container.innerHTML = buildFilledReportHtml(report, ctx);
   document.body.appendChild(container);
   try {
-    await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
+    await waitForImagesToLoad(container);
+    await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: PDF_HTML2CANVAS_OPTS, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }, pagebreak: PDF_PAGEBREAK_OPTS }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser. Try the .txt download instead."); }
   finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
 }
@@ -1643,12 +1666,12 @@ async function downloadBlankTemplatePdf(type) {
   if (!report) { alert("No template has been set up for this report type yet."); return; }
   const ctx = ctxForReport(report);
   App.pdfBuilding = "blank:" + type; App.render();
-  const container = document.createElement("div");
-  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
+  const container = makePdfContainer();
   container.innerHTML = buildFilledReportHtml(report, ctx);
   document.body.appendChild(container);
   try {
-    await html2pdf().set({ margin: 10, filename: `blank-${type}-template.pdf`, html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } }).from(container).save();
+    await waitForImagesToLoad(container);
+    await html2pdf().set({ margin: 10, filename: `blank-${type}-template.pdf`, html2canvas: PDF_HTML2CANVAS_OPTS, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }, pagebreak: PDF_PAGEBREAK_OPTS }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser."); }
   finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
 }
@@ -1661,16 +1684,16 @@ async function downloadSelectedReportsPdf() {
   const reports = ids.map((id) => App.org.reports.find((r) => r.id === id)).filter(Boolean);
   if (!reports.length) return;
   App.bulkPdfBuilding = true; App.render();
-  const container = document.createElement("div");
-  container.style.position = "fixed"; container.style.left = "-9999px"; container.style.top = "0";
+  const container = makePdfContainer();
   container.innerHTML = reports.map((r, i) => `<div style="${i > 0 ? "page-break-before:always;" : ""}">${buildFilledReportHtml(r, ctxForReport(r))}</div>`).join("");
   document.body.appendChild(container);
   try {
+    await waitForImagesToLoad(container);
     await html2pdf().set({
       margin: 10, filename: `reports-bulk-${reports.length}.pdf`,
-      html2canvas: { scale: 2, backgroundColor: "#ffffff" },
+      html2canvas: PDF_HTML2CANVAS_OPTS,
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ["css", "legacy"] },
+      pagebreak: PDF_PAGEBREAK_OPTS,
     }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the combined PDF in this browser."); }
   finally { document.body.removeChild(container); App.bulkPdfBuilding = false; App.render(); }
