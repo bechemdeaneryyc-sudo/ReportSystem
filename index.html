@@ -831,22 +831,36 @@ const App = {
     const l = this.org.locals.find((x) => x.id === id);
     return (l && l.executiveRoster) || {};
   },
-  // Computes the opening balance that should be carried into a report: the closing
-  // balance of the report immediately before it in this person's own chain, or their
-  // term opening balance if this is their first-ever report. Never user-editable —
-  // it only ever moves by the income/expenditure entered on each report.
+  // Computes the opening balance that should be carried into a report: an admin-approved
+  // manual correction if one was made more recently than the last report (see
+  // toggleBalanceEditUnlock), otherwise the closing balance of the report immediately
+  // before it in this person's own chain, or their term opening balance if this is
+  // their first-ever report.
   getOpeningBalanceFor(user, editingReport) {
     const template = this.templateForSubmit("financial");
     const closingField = template ? template.fields.find((f) => /closing balance/i.test(f.label)) : null;
     let chain = this.myFinancialReports(user);
     if (editingReport) chain = chain.filter((r) => (r.submittedAt || 0) < (editingReport.submittedAt || 0));
     const last = chain[chain.length - 1];
+    const lastAt = last ? (last.submittedAt || 0) : 0;
+    const overrideAt = user.balanceOverrideAt || 0;
+    const overrideStillValid = overrideAt > lastAt && (!editingReport || overrideAt < (editingReport.submittedAt || 0));
+    if (overrideStillValid && user.balanceOverride !== undefined && user.balanceOverride !== "") {
+      const v = parseFloat(user.balanceOverride);
+      if (!isNaN(v)) return v;
+    }
     if (last && closingField && last.data && last.data[closingField.id] !== undefined && last.data[closingField.id] !== "") {
       const v = parseFloat(last.data[closingField.id]);
       if (!isNaN(v)) return v;
     }
     const opening = parseFloat(user.termOpeningBalance);
     return isNaN(opening) ? 0 : opening;
+  },
+  // Admin only — lets a Financial Secretary/Treasurer manually correct their current
+  // balance from their profile (e.g. to match actual cash on hand), even though it
+  // normally only moves automatically from each report's income and expenditure.
+  async toggleBalanceEditUnlock(userId) {
+    await this.updateOrg((o) => { const u = o.users.find((x) => x.id === userId); if (u) u.balanceEditUnlocked = !u.balanceEditUnlocked; return o; });
   },
 
   openTemplateEditor(type) {
@@ -2074,7 +2088,8 @@ function membersViewHtml() {
     <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Name</th><th class="px-4 py-2 cra-label">Email</th><th class="px-4 py-2 cra-label">Scope</th><th class="px-4 py-2 cra-label">Position</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
     <tbody>${members.map((u) => {
       const local = u.localId ? App.org.locals.find((l) => l.id === u.localId) : null;
-      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(u.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(u.email)}</td><td class="px-4 py-3">${local ? esc(local.name) : "Parish"}</td><td class="px-4 py-3">${badge(u.isAdmin ? "gold" : "violet", u.isAdmin ? "IT Admin" : u.position)}</td><td class="px-4 py-3 text-right"><div class="row gap-2 justify-end">${btnHtml({ variant: "ghost", label: "Reset password", iconName: "lock", size: 12, attrs: `onclick="App.sendMemberResetEmail('${u.id}')"` })}${u.id === admin.id ? `<span class="text-xs" style="color:var(--ink-soft)">You</span>` : btnHtml({ variant: "danger", label: "Remove", iconName: "trash", size: 12, attrs: `onclick="if(confirm('Remove ${esc(u.name)}?')) App.removeMember('${u.id}')"` })}</div></td></tr>`;
+      const isFinancial = u.position === "Financial Secretary" || u.position === "Treasurer";
+      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(u.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(u.email)}</td><td class="px-4 py-3">${local ? esc(local.name) : "Parish"}</td><td class="px-4 py-3">${badge(u.isAdmin ? "gold" : "violet", u.isAdmin ? "IT Admin" : u.position)}</td><td class="px-4 py-3 text-right"><div class="row gap-2 justify-end">${isFinancial ? btnHtml({ variant: u.balanceEditUnlocked ? "secondary" : "ghost", label: u.balanceEditUnlocked ? "Balance edit allowed" : "Allow balance edit", iconName: "wallet", size: 12, attrs: `onclick="App.toggleBalanceEditUnlock('${u.id}')"` }) : ""}${btnHtml({ variant: "ghost", label: "Reset password", iconName: "lock", size: 12, attrs: `onclick="App.sendMemberResetEmail('${u.id}')"` })}${u.id === admin.id ? `<span class="text-xs" style="color:var(--ink-soft)">You</span>` : btnHtml({ variant: "danger", label: "Remove", iconName: "trash", size: 12, attrs: `onclick="if(confirm('Remove ${esc(u.name)}?')) App.removeMember('${u.id}')"` })}</div></td></tr>`;
     }).join("")}</tbody>
   </table></div></div>`;
 }
@@ -2110,11 +2125,15 @@ function profileViewHtml() {
       ${user.signatureDataUrl ? `<img class="sig-thumb mb-2" src="${user.signatureDataUrl}" />` : `<p class="text-xs mb-2" style="color:var(--ink-soft)">No signature uploaded yet.</p>`}
       <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("pen", 13)} ${user.signatureDataUrl ? "Replace signature" : "Upload signature"}<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadSignature(this.files[0])" /></label>
     </div>
-    ${isFinancial ? (App.hasFinancialHistory(user) ? `<div class="space-y-2">
-      <div class="cra-label mb-1">Opening balance at start of term (GHS)</div>
-      <div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">GHS ${fmtMoney(parseFloat(user.termOpeningBalance) || 0)}</div>
-      <p class="text-xs" style="color:var(--ink-soft)">Locked now that you've submitted a financial report — your balance updates automatically from your reports' income and expenditure from here on.</p>
-    </div>` : `<form onsubmit="return handleTermBalanceSubmit(event)" class="space-y-2">
+    ${isFinancial ? (App.hasFinancialHistory(user) ? (user.balanceEditUnlocked ? `<form onsubmit="return handleBalanceOverrideSubmit(event)" class="space-y-2">
+      ${fieldWrap("Current balance / amount left (GHS)", `<input id="balance-override" class="cra-input" type="number" value="${esc(String(App.getOpeningBalanceFor(user, null)))}" />`)}
+      <p class="text-xs" style="color:var(--ink-soft)">Your IT admin has allowed you to correct this directly — e.g. to match actual cash on hand. Whatever you save here becomes the opening balance on your next report.</p>
+      ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
+    </form>` : `<div class="space-y-2">
+      <div class="cra-label mb-1">Current balance (GHS)</div>
+      <div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">GHS ${fmtMoney(App.getOpeningBalanceFor(user, null))}</div>
+      <p class="text-xs" style="color:var(--ink-soft)">Locked — updates automatically from your reports' income and expenditure. Ask your IT admin to allow balance edit if this doesn't match your books.</p>
+    </div>`) : `<form onsubmit="return handleTermBalanceSubmit(event)" class="space-y-2">
       ${fieldWrap("Opening balance at start of term (GHS)", `<input id="term-balance" class="cra-input" type="number" value="${esc(user.termOpeningBalance || "")}" placeholder="Amount you started your term with" />`)}
       <p class="text-xs" style="color:var(--ink-soft)">Used to pre-fill the opening balance on your first financial report. Once you submit that report, this amount locks and your balance updates automatically after that.</p>
       ${btnHtml({ variant: "primary", label: "Save", iconName: "check", attrs: `type="submit"` })}
@@ -2135,6 +2154,7 @@ function profileViewHtml() {
   </div>`;
 }
 function handleTermBalanceSubmit(e) { e.preventDefault(); App.updateProfile({ termOpeningBalance: document.getElementById("term-balance").value }); return false; }
+function handleBalanceOverrideSubmit(e) { e.preventDefault(); App.updateProfile({ balanceOverride: document.getElementById("balance-override").value, balanceOverrideAt: Date.now() }); return false; }
 function handlePhoneSaveSubmit(e) {
   e.preventDefault();
   const val = document.getElementById("profile-phone").value.trim();
