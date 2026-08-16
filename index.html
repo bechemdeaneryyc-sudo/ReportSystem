@@ -80,6 +80,12 @@ html, body { margin: 0; padding: 0; }
 @keyframes cra-spin { to { transform: rotate(360deg); } }
 .cra-spin { animation: cra-spin 1s linear infinite; }
 
+/* Loading screen: an animated keyboard "playing", with music notes drifting up. */
+@keyframes cra-key-press { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(3px); } }
+.cra-loader-key { animation: cra-key-press 1.1s ease-in-out infinite; transform-origin: bottom; }
+@keyframes cra-note-float { 0% { transform: translate(0,0) rotate(-6deg); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(6px,-46px) rotate(8deg); opacity: 0; } }
+.cra-loader-note { animation: cra-note-float 2.6s ease-in-out infinite; }
+
 .row { display: flex; }
 .col { display: flex; flex-direction: column; }
 .items-center { align-items: center; }
@@ -554,10 +560,30 @@ const App = {
   showAddMember: false,
   addMemberDraft: { level: "local", localId: "", position: "", name: "", email: "", phone: "", password: "" },
   parishSettingsDraft: null,
+  emailReset: { active: false, status: "idle", email: "", oobCode: "", newPassword: "", error: "" },
 
   async init() {
     const [org, sess] = await Promise.all([loadOrg(), loadSession()]);
     this.org = org;
+    // A password-reset email link lands back here with these query params (see the
+    // actionCodeSettings passed to sendPasswordResetEmail). Handle it before anything
+    // else, and always end up on the login screen once it's resolved — whether or not
+    // there happens to be an existing session in this browser.
+    const params = new URLSearchParams(window.location.search);
+    if (firebaseAuth && params.get("mode") === "resetPassword" && params.get("oobCode")) {
+      const oobCode = params.get("oobCode");
+      history.replaceState(null, "", window.location.pathname);
+      this.emailReset.active = true; this.emailReset.oobCode = oobCode; this.emailReset.status = "verifying";
+      this.screen = "login"; this.render();
+      try {
+        const email = await firebaseAuth.verifyPasswordResetCode(oobCode);
+        this.emailReset.email = email; this.emailReset.status = "ready";
+      } catch (e) {
+        this.emailReset.status = "error"; this.emailReset.error = authErrorMessage(e);
+      }
+      this.render();
+      return;
+    }
     if (sess && org.users.some((u) => u.id === sess)) { this.sessionUserId = sess; this.screen = "app"; }
     else this.screen = "landing";
     this.render();
@@ -604,7 +630,10 @@ const App = {
     if (!clean) { this.forgotStatus = "error"; this.forgotError = "Enter your email address."; this.render(); return; }
     this.forgotStatus = "sending"; this.render();
     try {
-      await firebaseAuth.sendPasswordResetEmail(clean);
+      // Send the person back to this same app (not Firebase's generic hosted page)
+      // when they click the link in the email.
+      const baseUrl = window.location.href.split("?")[0].split("#")[0];
+      await firebaseAuth.sendPasswordResetEmail(clean, { url: baseUrl, handleCodeInApp: true });
       this.forgotStatus = "sent";
     } catch (e) {
       if (e && e.code === "auth/user-not-found") this.forgotStatus = "sent"; // don't reveal whether the email is registered
@@ -612,6 +641,19 @@ const App = {
     }
     this.render();
   },
+
+  // --- Finish a reset started from the emailed link (see App.init) ---
+  async confirmEmailPasswordReset(newPassword) {
+    const s = this.emailReset;
+    if (!newPassword || newPassword.length < 6) { s.status = "error"; s.error = "Password should be at least 6 characters."; this.render(); return; }
+    s.status = "saving"; s.error = ""; this.render();
+    try {
+      await firebaseAuth.confirmPasswordReset(s.oobCode, newPassword);
+      s.status = "done";
+    } catch (e) { s.status = "error"; s.error = authErrorMessage(e); }
+    this.render();
+  },
+  dismissEmailPasswordReset() { this.emailReset.active = false; this.render(); },
 
   // --- Reset password via SMS, for anyone who has verified & linked a phone number ---
   goSmsReset() { this.forgotMode = false; this.smsReset = { active: true, step: "phone", phone: "", code: "", newPassword: "", status: "idle", error: "" }; this.render(); },
@@ -1167,6 +1209,7 @@ function renderLanding() {
 /* ==================================================================== */
 
 function renderLogin() {
+  if (App.emailReset.active) return renderEmailPasswordReset();
   if (App.smsReset.active) return renderSmsReset();
   if (App.forgotMode) return renderForgotPassword();
   return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
@@ -1241,6 +1284,39 @@ function renderSmsReset() {
         <div class="row items-center gap-2 mb-5">
           <div class="cra-seal cra-display text-sm">†</div>
           <div><h2 class="cra-display text-xl">Reset by SMS</h2><p class="text-xs" style="color:var(--ink-soft)">Only works for a phone number you've already verified on your profile</p></div>
+        </div>
+        ${body}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderEmailPasswordReset() {
+  const s = App.emailReset;
+  let body;
+  if (s.status === "verifying") {
+    body = `<div class="row items-center gap-2 text-sm" style="color:var(--ink-soft)">${icon("loader", 16, "cra-spin")} Checking your reset link&hellip;</div>`;
+  } else if (s.status === "error") {
+    body = `${errorNote(s.error || "This reset link is invalid or has expired.")}
+      <p class="text-sm mt-3" style="color:var(--ink-soft)">Request a fresh link and try again.</p>
+      ${btnHtml({ variant: "primary", label: "Back to log in", extraClass: "w-full mt-3", attrs: `onclick="App.dismissEmailPasswordReset()"` })}`;
+  } else if (s.status === "done") {
+    body = `<p class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Password updated — log in with your new password.</p>
+      ${btnHtml({ variant: "primary", label: "Back to log in", extraClass: "w-full mt-3", attrs: `onclick="App.dismissEmailPasswordReset()"` })}`;
+  } else {
+    body = `<div class="space-y-4">
+      <p class="text-sm" style="color:var(--ink-soft)">Choose a new password for <strong>${esc(s.email)}</strong>.</p>
+      ${fieldWrap("New password", `<input id="email-reset-password" class="cra-input" type="password" minlength="6" placeholder="••••••••" />`)}
+      ${s.status === "error" ? errorNote(s.error) : ""}
+      ${btnHtml({ variant: "primary", label: s.status === "saving" ? "Saving…" : "Save new password", extraClass: "w-full", attrs: `onclick="App.confirmEmailPasswordReset(document.getElementById('email-reset-password').value)" ${s.status === "saving" ? "disabled" : ""}` })}
+    </div>`;
+  }
+  return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
+    <div class="w-full max-w-md cra-fade-in">
+      <div class="cra-card cra-card-accent p-7">
+        <div class="row items-center gap-2 mb-5">
+          <div class="cra-seal cra-display text-sm">†</div>
+          <div><h2 class="cra-display text-xl">Reset your password</h2><p class="text-xs" style="color:var(--ink-soft)">From the link in your email</p></div>
         </div>
         ${body}
       </div>
@@ -2406,10 +2482,30 @@ function renderApp() {
 /*  Root render                                                          */
 /* ==================================================================== */
 
+function renderLoadingScreen() {
+  const whiteKeys = Array.from({ length: 8 });
+  const notes = [
+    { x: 18, delay: 0 }, { x: 46, delay: 0.5 }, { x: 74, delay: 1 }, { x: 102, delay: 1.6 },
+  ];
+  return `<div class="col items-center" style="min-height:100vh;justify-content:center;background:var(--bg)">
+    <div class="col items-center gap-4 cra-fade-in">
+      <svg width="150" height="110" viewBox="0 0 150 110" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        ${notes.map((n, i) => `<text class="cra-loader-note" x="${n.x}" y="34" font-size="15" fill="var(--gold)" style="animation-delay:${n.delay}s">${i % 2 === 0 ? "&#9835;" : "&#9834;"}</text>`).join("")}
+        <rect x="4" y="46" width="142" height="52" rx="6" fill="var(--violet)" />
+        <g>
+          ${whiteKeys.map((_, i) => `<rect class="cra-loader-key" x="${8 + i * 17}" y="52" width="15" height="40" rx="2" fill="#fdfaf2" stroke="#d9d4c4" style="animation-delay:${(i * 0.09).toFixed(2)}s" />`).join("")}
+        </g>
+        ${[0, 1, 3, 4, 6].map((i) => `<rect x="${8 + i * 17 + 11}" y="52" width="10" height="24" rx="1.5" fill="var(--ink)" />`).join("")}
+      </svg>
+      <span class="text-sm" style="color:var(--ink-soft)">Opening the register&hellip;</span>
+    </div>
+  </div>`;
+}
+
 function render() {
   const root = document.getElementById("app");
   if (App.screen === "loading" || !App.org) {
-    root.innerHTML = `<div class="col items-center" style="min-height:100vh;justify-content:center;background:var(--bg)"><div class="col items-center gap-3">${icon("loader", 26, "cra-spin")}<span class="text-sm" style="color:var(--ink-soft)">Opening the register&hellip;</span></div></div>`;
+    root.innerHTML = renderLoadingScreen();
     return;
   }
   if (App.screen === "landing") root.innerHTML = renderLanding();
