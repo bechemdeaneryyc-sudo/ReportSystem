@@ -75,6 +75,20 @@ html, body { margin: 0; padding: 0; }
 .cra-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
 .cra-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
 
+/* Word-style document editor used when a secretary fills a report against an uploaded .docx template */
+.word-toolbar { background: linear-gradient(180deg,#2b579a,#1b3f73); border-radius: 10px 10px 0 0; padding: 0.65rem 1rem; display: flex; align-items: center; gap: 0.7rem; color: #fff; }
+.word-toolbar .word-tab { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; padding: 0.25rem 0.6rem; border-radius: 5px; opacity: 0.85; }
+.word-toolbar .word-tab.active { background: rgba(255,255,255,0.18); opacity: 1; }
+.word-ribbon { background: #f3f2f1; border: 1px solid #d9d4c4; border-top: none; padding: 0.65rem 0.9rem; }
+.word-page-wrap { background: #d7d2c1; padding: 2rem 1rem; display: flex; justify-content: center; }
+.word-page { background: #ffffff; width: 100%; max-width: 760px; padding: 2.5rem 2.75rem; box-shadow: 0 3px 14px rgba(33,31,46,0.18), 0 0 0 1px rgba(33,31,46,0.05); font-family: 'Inter', sans-serif; color: #211f2e; border-radius: 0 0 6px 6px; }
+.docx-slot { display: block; width: 100%; margin: 0.25rem 0 0.9rem 0; padding: 0.45rem 0.6rem; font-size: 12.5px; font-family: inherit; line-height: 1.5; border: 1px dashed #a3812f; border-radius: 4px; background: #fbf6e6; color: #211f2e; resize: vertical; box-sizing: border-box; }
+.docx-slot:focus { outline: none; border-style: solid; border-color: #732a30; background: #fff9ec; box-shadow: 0 0 0 3px rgba(115,42,48,0.12); }
+.docx-slot::placeholder { color: #a3812f; opacity: 0.85; }
+.docx-slot-readonly { display: inline-block; width: 100%; margin: 0.25rem 0 0.9rem 0; padding: 0.45rem 0.6rem; font-size: 12.5px; border: 1px solid #d9d4c4; border-radius: 4px; background: #f5f3ea; color: #57536b; box-sizing: border-box; }
+.docx-roster-val { font-weight: 600; }
+.docx-roster-missing { color: var(--danger); font-style: italic; font-size: 10.5px; }
+
 @keyframes cra-fade-in { from { opacity: 0; transform: translateY(6px);} to {opacity:1; transform:translateY(0);} }
 .cra-fade-in { animation: cra-fade-in .35s ease; }
 @keyframes cra-spin { to { transform: rotate(360deg); } }
@@ -573,6 +587,12 @@ const App = {
     if (firebaseAuth && params.get("mode") === "resetPassword" && params.get("oobCode")) {
       const oobCode = params.get("oobCode");
       history.replaceState(null, "", window.location.pathname);
+      // Force a completely clean slate — no residual session, no "already logged in"
+      // state — regardless of who was signed in on this browser before the link was
+      // clicked. The person always lands on a blank login page, not anyone's account.
+      this.sessionUserId = null;
+      await saveSession(null);
+      if (firebaseAuth.currentUser) { try { await firebaseAuth.signOut(); } catch (e) {} }
       this.emailReset.active = true; this.emailReset.oobCode = oobCode; this.emailReset.status = "verifying";
       this.screen = "login"; this.render();
       try {
@@ -653,7 +673,7 @@ const App = {
     } catch (e) { s.status = "error"; s.error = authErrorMessage(e); }
     this.render();
   },
-  dismissEmailPasswordReset() { this.emailReset.active = false; this.render(); },
+  dismissEmailPasswordReset() { this.emailReset.active = false; this.loginError = ""; this.render(); },
 
   // --- Reset password via SMS, for anyone who has verified & linked a phone number ---
   goSmsReset() { this.forgotMode = false; this.smsReset = { active: true, step: "phone", phone: "", code: "", newPassword: "", status: "idle", error: "" }; this.render(); },
@@ -1904,64 +1924,149 @@ function submitReportFormHtml(type) {
     const m = matchRosterField(f.label);
     if (m) rosterFieldMap[f.id] = m;
   });
+  Object.keys(rosterFieldMap).forEach((fid) => {
+    const { role, kind } = rosterFieldMap[fid];
+    submitFormValues[fid] = (roster[role] && roster[role][kind]) || "";
+  });
+
+  // Renders one question as a fillable "slot" — an editable input/textarea for ordinary
+  // questions, or a locked read-only slot for values that are computed/auto-filled
+  // (financial balances, roster name/phone). Used both inline in the document body and
+  // for any question that couldn't be matched to a spot in the uploaded .docx text.
+  const editSlot = (f) => {
+    if (openingField && f.id === openingField.id) {
+      const val = submitFormValues[f.id] || "0";
+      return `<span class="docx-slot-readonly" title="Carried over automatically from your last report's closing balance">GHS ${fmtMoney(parseFloat(val) || 0)}<input type="hidden" id="fin-opening-hidden" name="${f.id}" value="${esc(val)}" /></span>`;
+    }
+    if (closingField && f.id === closingField.id) {
+      const val = submitFormValues[f.id] || "0";
+      return `<span class="docx-slot-readonly" id="fin-closing-display" title="Calculated automatically as opening balance + income − expenditure">GHS ${fmtMoney(parseFloat(val) || 0)}<input type="hidden" id="fin-closing-hidden" name="${f.id}" value="${esc(val)}" /></span>`;
+    }
+    if (rosterFieldMap[f.id]) {
+      const val = submitFormValues[f.id] || "";
+      return val
+        ? `<span class="docx-slot-readonly">${esc(val)}<input type="hidden" name="${f.id}" value="${esc(val)}" /></span>`
+        : `<span class="docx-slot-readonly" style="color:var(--danger)">Not set yet<input type="hidden" name="${f.id}" value="" /></span>`;
+    }
+    const isIncome = incomeFields.some((inf) => inf.id === f.id);
+    const isExpenditure = expenditureFields.some((exf) => exf.id === f.id);
+    const finAttrs = isIncome ? ` data-fin-role="income" oninput="recalcFinancial()"` : isExpenditure ? ` data-fin-role="expenditure" oninput="recalcFinancial()"` : "";
+    if (f.type === "textarea") return `<textarea class="docx-slot" name="${f.id}" rows="2" placeholder="Click to fill in — ${esc(f.label)}">${esc(submitFormValues[f.id] || "")}</textarea>`;
+    return `<input class="docx-slot" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}"${finAttrs} placeholder="Click to fill in — ${esc(f.label)}" value="${esc(submitFormValues[f.id] || "")}" />`;
+  };
+
+  // Renders the uploaded .docx template itself — headings, tables and all — as the
+  // fillable document, dropping an editable slot in wherever a parsed question was
+  // found in the source text. This is what makes filling a report feel like editing
+  // the real Word document instead of answering a disconnected list of questions.
+  let docBodyHtml = "", matchedIds = new Set();
+  if (template.docHtml) {
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = template.docHtml;
+
+    // Auto-fill any NAME/POSITION/(PHONE) roster table straight from the executive
+    // roster, the same way the finished report view does — it's locked, not typed.
+    Array.from(wrapper.querySelectorAll("table")).forEach((table) => {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      if (!rows.length) return;
+      const headerCells = Array.from(rows[0].children).map((c) => (c.textContent || "").trim().toLowerCase());
+      const nameIdx = headerCells.findIndex((h) => /name/.test(h));
+      const posIdx = headerCells.findIndex((h) => /position/.test(h));
+      const phoneIdx = headerCells.findIndex((h) => /phone|tel|contact/.test(h));
+      if (nameIdx === -1 || posIdx === -1) return;
+      rows.slice(1).forEach((tr) => {
+        const cells = Array.from(tr.children);
+        const posText = (cells[posIdx] && cells[posIdx].textContent || "").trim();
+        const roleKey = ROSTER_ROLES_DISPLAY.find((r) => simplifyRoleText(r) === simplifyRoleText(posText));
+        if (!roleKey) return;
+        const info = roster[roleKey] || {};
+        const nameField = template.fields.find((f) => f.label === `${roleKey} — Name`);
+        const phoneField = template.fields.find((f) => f.label === `${roleKey} — Phone`);
+        if (cells[nameIdx]) {
+          const val = info.name || "";
+          cells[nameIdx].innerHTML = (val ? `<span class="docx-roster-val">${esc(val)}</span>` : `<span class="docx-roster-missing">Not set</span>`) + (nameField ? `<input type="hidden" name="${nameField.id}" value="${esc(val)}" />` : "");
+          if (nameField) matchedIds.add(nameField.id);
+        }
+        if (phoneIdx !== -1 && cells[phoneIdx]) {
+          const val = info.phone || "";
+          cells[phoneIdx].innerHTML = (val ? `<span class="docx-roster-val">${esc(val)}</span>` : `<span class="docx-roster-missing">Not set</span>`) + (phoneField ? `<input type="hidden" name="${phoneField.id}" value="${esc(val)}" />` : "");
+          if (phoneField) matchedIds.add(phoneField.id);
+        }
+      });
+    });
+
+    // Give PART A / PART B markers the navy-banner treatment they get in the finished
+    // report, and drop a fillable slot in right after whichever line each question came from.
+    const blocks = Array.from(wrapper.children).length ? Array.from(wrapper.children) : [wrapper];
+    blocks.forEach((el) => {
+      const text = (el.textContent || "").trim();
+      if (isPartMarker(text)) { el.classList.add("docx-banner"); return; }
+      const lower = text.toLowerCase();
+      const f = template.fields.find((fld) => !matchedIds.has(fld.id) && text && lower.indexOf(fld.label.toLowerCase()) !== -1);
+      if (f) { matchedIds.add(f.id); el.insertAdjacentHTML("afterend", editSlot(f)); }
+    });
+    docBodyHtml = wrapper.innerHTML;
+  }
+  const leftoverFields = template.fields.filter((f) => !matchedIds.has(f.id));
+
   return `
   ${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}
   ${isFinancial && openingField ? `<div class="row items-center gap-3 p-4 mb-4 cra-card" style="background:linear-gradient(135deg, rgba(44,36,81,0.06), rgba(163,129,47,0.08));border-color:var(--gold)">
     <div class="cra-seal" style="width:42px;height:42px">${icon("scroll", 18)}</div>
-    <div><div class="cra-label mb-1">Balance carried into this report</div><div class="cra-display" style="font-size:1.35rem;font-weight:600">GHS ${fmtMoney(computedOpening)}</div><p class="text-xs mt-1" style="color:var(--ink-soft)">Fills in automatically below as your opening balance — enter income and expenditure and the closing balance updates itself.</p></div>
+    <div><div class="cra-label mb-1">Balance carried into this report</div><div class="cra-display" style="font-size:1.35rem;font-weight:600">GHS ${fmtMoney(computedOpening)}</div><p class="text-xs mt-1" style="color:var(--ink-soft)">Fills in automatically in the document below as your opening balance — enter income and expenditure and the closing balance updates itself.</p></div>
   </div>` : ""}
-  <form class="cra-card cra-card-accent p-5 space-y-4" onsubmit="return handleSubmitReport(event,'${type}')">
-    ${fieldWrap("Report heading", `<input id="submit-heading" class="cra-input" placeholder="e.g. TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___" value="${esc(editingReport ? (editingReport.heading || "") : App.getHeadingForScope(user))}" />`, "Set by your IT admin as a default for every template — feel free to edit it for this report.")}
-    <div class="grid sm-grid-2">
-      ${fieldWrap("How often is this report?", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
-        <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option>
-        <option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option>
-        <option value="annual" ${frequency === "annual" ? "selected" : ""}>Annual</option>
-        <option value="event" ${frequency === "event" ? "selected" : ""}>Current programme</option>
-      </select>`)}
-      ${fieldWrap("Date recorded", `<input id="submit-date-recorded" class="cra-input" type="date" value="${esc(editingReport && editingReport.recordedDate ? editingReport.recordedDate : todayISODate())}" />`, "Defaults to today — edit it if this report covers a different date.")}
+  <form onsubmit="return handleSubmitReport(event,'${type}')">
+    <div class="word-toolbar">
+      ${icon("file", 15)}
+      <span class="cra-display text-sm">${esc(reportTypeLabel(type))}.docx</span>
+      <span class="word-tab active">Fill in</span>
     </div>
-    <div id="submit-event-wrap" style="display:${frequency === "event" ? "block" : "none"}">
-      ${fieldWrap("Programme / event name", `<input id="submit-eventName" class="cra-input" placeholder="e.g. Diocesan Prayer Rally" value="${esc(eventName || "")}" />`)}
+    <div class="word-ribbon">
+      <div class="row gap-3 items-start wrap">
+        <div class="flex-1" style="min-width:220px">${fieldWrap("Report heading", `<input id="submit-heading" class="cra-input" placeholder="e.g. TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___" value="${esc(editingReport ? (editingReport.heading || "") : App.getHeadingForScope(user))}" />`)}</div>
+        <div style="width:160px">${fieldWrap("Frequency", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
+          <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option>
+          <option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option>
+          <option value="annual" ${frequency === "annual" ? "selected" : ""}>Annual</option>
+          <option value="event" ${frequency === "event" ? "selected" : ""}>Current programme</option>
+        </select>`)}</div>
+        <div style="width:170px">${fieldWrap("Date recorded", `<input id="submit-date-recorded" class="cra-input" type="date" value="${esc(editingReport && editingReport.recordedDate ? editingReport.recordedDate : todayISODate())}" />`)}</div>
+      </div>
+      <div id="submit-event-wrap" style="display:${frequency === "event" ? "block" : "none"};margin-top:0.65rem">
+        ${fieldWrap("Programme / event name", `<input id="submit-eventName" class="cra-input" placeholder="e.g. Diocesan Prayer Rally" value="${esc(eventName || "")}" />`)}
+      </div>
     </div>
-    ${template.fields.map((f) => {
-      let input;
-      if (openingField && f.id === openingField.id) {
-        const val = submitFormValues[f.id] || "0";
-        input = `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)" id="fin-opening-display">GHS ${fmtMoney(parseFloat(val) || 0)}</div><input type="hidden" id="fin-opening-hidden" name="${f.id}" value="${esc(val)}" />`;
-        return fieldWrap(f.label, input, "Carried over automatically from your last report's closing balance (or your term's opening amount for your first report) — this can't be edited directly.");
-      }
-      if (closingField && f.id === closingField.id) {
-        const val = submitFormValues[f.id] || "0";
-        input = `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)" id="fin-closing-display">GHS ${fmtMoney(parseFloat(val) || 0)}</div><input type="hidden" id="fin-closing-hidden" name="${f.id}" value="${esc(val)}" />`;
-        return fieldWrap(f.label, input, "Calculated automatically as opening balance + income − expenditure — this can't be edited directly.");
-      }
-      if (rosterFieldMap[f.id]) {
-        const { role, kind } = rosterFieldMap[f.id];
-        const rosterVal = (roster[role] && roster[role][kind]) || "";
-        submitFormValues[f.id] = rosterVal;
-        input = rosterVal
-          ? `<div class="cra-input" style="background:#f5f3ea;color:var(--ink-soft)">${esc(rosterVal)}</div><input type="hidden" name="${f.id}" value="${esc(rosterVal)}" />`
-          : `<div class="cra-input" style="background:#f5f3ea;color:#a3382e">Not set yet</div><input type="hidden" name="${f.id}" value="" />`;
-        return fieldWrap(f.label, input, rosterVal ? "Auto-filled from the executive roster your IT admin set for this term — this can't be edited here." : "Your IT admin hasn't added this to the roster yet — once they do, it'll fill in here automatically.");
-      }
-      const isIncome = incomeFields.some((inf) => inf.id === f.id);
-      const isExpenditure = expenditureFields.some((exf) => exf.id === f.id);
-      const finAttrs = isIncome ? ` data-fin-role="income" oninput="recalcFinancial()"` : isExpenditure ? ` data-fin-role="expenditure" oninput="recalcFinancial()"` : "";
-      if (f.type === "textarea") input = `<textarea class="cra-textarea" rows="3" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea>`;
-      else input = `<input class="cra-input" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}"${finAttrs} value="${esc(submitFormValues[f.id] || "")}" />`;
-      return fieldWrap(f.label, input, f.help);
-    }).join("")}
-    ${submitCustomFields.length ? `<div class="cra-label" style="color:var(--violet);padding-top:0.25rem">Your own questions</div>` : ""}
-    ${submitCustomFields.map((f) => `<div class="row items-start gap-2">
-        <div class="flex-1">${fieldWrap(f.label, `<textarea class="cra-textarea" rows="2" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea>`)}</div>
-        <button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" style="margin-top:1.4rem" onclick="removeCustomSubmitField('${f.id}')">${icon("trash", 13)}</button>
-      </div>`).join("")}
-    <div class="row gap-2 p-3" style="background:#f5f3ea;border-radius:8px">
+    <div class="word-page-wrap">
+      <div class="word-page">
+        ${template.docHtml ? `<style>
+          .word-page table { width:100%; border-collapse:collapse; margin:8px 0 16px 0; }
+          .word-page table th, .word-page table td { border:1px solid #c7c1da; padding:6px 8px; font-size:11px; text-align:left; vertical-align:top; }
+          .word-page table th { background:#232a52; color:#ffffff; text-transform:uppercase; font-size:10px; letter-spacing:0.03em; }
+          .word-page table tr:nth-child(even) td { background:#f6f4ec; }
+          .word-page p { margin:0 0 10px 0; font-size:12.5px; line-height:1.6; }
+          .word-page strong { font-weight:700; }
+          .word-page em { color:#6b6578; font-style:italic; }
+          .word-page h1, .word-page h2, .word-page h3 { font-family:'Fraunces',Georgia,serif; margin:16px 0 8px; color:#232a52; }
+          .word-page .docx-banner { background:#232a52; color:#ffffff; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; text-align:center; padding:8px 10px; margin:18px 0 12px; font-size:12px; }
+        </style>
+        <div class="docx-banner" style="margin:0 0 18px 0">${esc(reportTypeLabel(type))}</div>
+        ${docBodyHtml}` : `<p class="text-sm mb-4" style="color:var(--ink-soft)">No Word template file was uploaded for this report — fill in the questions below.</p>`}
+        ${leftoverFields.length ? `<div style="margin-top:${template.docHtml ? "22px" : "0"}">
+          ${template.docHtml ? `<div class="docx-banner" style="margin-bottom:14px">Additional items</div>` : ""}
+          ${leftoverFields.map((f) => `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${f.help ? `<p class="text-xs mb-1" style="color:var(--ink-soft)">${esc(f.help)}</p>` : ""}${editSlot(f)}`).join("")}
+        </div>` : ""}
+        ${submitCustomFields.length ? `<div class="docx-banner" style="margin:22px 0 14px 0">Your own questions</div>` : ""}
+        ${submitCustomFields.map((f) => `<div class="row items-start gap-2">
+            <div class="flex-1"><div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div><textarea class="docx-slot" rows="2" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea></div>
+            <button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" style="margin-top:0.2rem" onclick="removeCustomSubmitField('${f.id}')">${icon("trash", 13)}</button>
+          </div>`).join("")}
+      </div>
+    </div>
+    <div class="row gap-2 p-3 mt-3" style="background:#f5f3ea;border-radius:8px">
       <input id="custom-field-label" class="cra-input flex-1" placeholder="Add your own question…" />
       ${btnHtml({ variant: "secondary", label: "Add question", iconName: "plus", attrs: `type="button" onclick="addCustomSubmitField()"` })}
     </div>
-    <div class="row items-center gap-3" style="padding-top:0.5rem">
+    <div class="row items-center gap-3 mt-3">
       ${btnHtml({ variant: "primary", label: editing ? "Save changes" : "Submit report", iconName: "upload", attrs: `type="submit"` })}
       ${done ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} ${editing ? "Saved" : "Submitted — the president can now review it"}</span>` : ""}
     </div>
