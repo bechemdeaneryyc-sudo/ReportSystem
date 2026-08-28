@@ -337,6 +337,10 @@ function reportTypesForPosition(pos) {
   return [];
 }
 function reportTypeLabel(type) { return REPORT_TYPE_LABELS[type] || type; }
+// Financial reports are filled by the Financial Secretary/Treasurer; program and meeting
+// reports are filled by the Secretary — used to label the template so presidents/admins
+// building it can see at a glance who it goes to.
+function templateAudienceLabel(type) { return type === "financial" ? "Financial Secretary & Treasurer" : "Secretary"; }
 const uid = () => Math.random().toString(36).slice(2, 10);
 function guessFieldType(line) {
   const l = line.toLowerCase();
@@ -1833,6 +1837,49 @@ function reportViewModalHtml(report) {
 /*  Template builder                                                     */
 /* ==================================================================== */
 
+// Read-only counterpart to the fillable document body built in submitReportFormHtml —
+// same tables/headings from the uploaded .docx, but every matched question renders as
+// a static, non-interactive placeholder (no inputs) since presidents/admins here are
+// laying the template out, not filling it in.
+function templatePreviewDocBody(fields, docHtml) {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = docHtml;
+  const matchedIds = new Set();
+
+  Array.from(wrapper.querySelectorAll("table")).forEach((table) => {
+    const rows = Array.from(table.querySelectorAll("tr"));
+    if (!rows.length) return;
+    const headerCells = Array.from(rows[0].children).map((c) => (c.textContent || "").trim().toLowerCase());
+    const nameIdx = headerCells.findIndex((h) => /name/.test(h));
+    const posIdx = headerCells.findIndex((h) => /position/.test(h));
+    const phoneIdx = headerCells.findIndex((h) => /phone|tel|contact/.test(h));
+    if (nameIdx === -1 || posIdx === -1) return;
+    rows.slice(1).forEach((tr) => {
+      const cells = Array.from(tr.children);
+      const posText = (cells[posIdx] && cells[posIdx].textContent || "").trim();
+      const roleKey = ROSTER_ROLES_DISPLAY.find((r) => simplifyRoleText(r) === simplifyRoleText(posText));
+      if (!roleKey) return;
+      const nameField = fields.find((f) => f.label === `${roleKey} — Name`);
+      const phoneField = fields.find((f) => f.label === `${roleKey} — Phone`);
+      if (cells[nameIdx] && nameField) { cells[nameIdx].innerHTML = `<span style="color:#a39ab0;font-style:italic;font-size:10.5px">Auto-fills from roster</span>`; matchedIds.add(nameField.id); }
+      if (phoneIdx !== -1 && cells[phoneIdx] && phoneField) { cells[phoneIdx].innerHTML = `<span style="color:#a39ab0;font-style:italic;font-size:10.5px">Auto-fills from roster</span>`; matchedIds.add(phoneField.id); }
+    });
+  });
+
+  const blocks = Array.from(wrapper.children).length ? Array.from(wrapper.children) : [wrapper];
+  blocks.forEach((el) => {
+    const text = (el.textContent || "").trim();
+    if (isPartMarker(text)) { el.classList.add("docx-banner"); return; }
+    const lower = text.toLowerCase();
+    const f = fields.find((fld) => !matchedIds.has(fld.id) && text && lower.indexOf(fld.label.toLowerCase()) !== -1);
+    if (f) {
+      matchedIds.add(f.id);
+      el.insertAdjacentHTML("afterend", `<span class="docx-slot-readonly" style="color:#a3812f;font-style:italic">${esc(f.label)}</span>`);
+    }
+  });
+  return { html: wrapper.innerHTML, matchedIds };
+}
+
 function templateEditorHtml(type) {
   if (App.templateDraft[type] === null) App.openTemplateEditor(type);
   const fields = App.templateDraft[type];
@@ -1840,14 +1887,17 @@ function templateEditorHtml(type) {
   const saved = App.templateSavedFlash === type;
   const doc = App.templateDraftDoc[type];
   const flash = App.templateUploadFlash && App.templateUploadFlash.type === type ? App.templateUploadFlash : null;
+  const preview = doc && doc.html ? templatePreviewDocBody(fields, doc.html) : null;
+  const leftoverFields = preview ? fields.filter((f) => !preview.matchedIds.has(f.id)) : fields;
   return `<div class="cra-card cra-card-accent p-5">
-    <div class="row items-center justify-between mb-4">
+    <div class="row items-center justify-between mb-2">
       <div class="row items-center gap-2">${icon(REPORT_TYPE_ICON[type], 16, "")}<h3 class="cra-display text-lg">${reportTypeLabel(type)} template</h3></div>
       ${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}
     </div>
+    <div class="mb-4">${badge(type === "financial" ? "gold" : "violet", `Filled by: ${templateAudienceLabel(type)}`)}</div>
     <div class="p-3 mb-4" style="background:#f5f3ea;border-radius:8px;border:1px dashed var(--gold)">
       <div class="cra-label mb-2" style="color:var(--violet)">Upload a Word (.docx) template</div>
-      <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Section headings and table headers are skipped automatically, and ${type === "financial" ? "only Part B (Financial Secretary/Treasurer)" : "only Part A (Secretary)"} questions are pulled in; the layout is reused when building the filled-in PDF.</p>
+      <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Section headings and table headers are skipped automatically, and ${type === "financial" ? "only Part B (Financial Secretary/Treasurer)" : "only Part A (Secretary)"} questions are pulled in; the layout is reused when building the filled-in PDF and the live fill-in document.</p>
       <div class="row wrap items-center gap-2">
         <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("upload", 14)} ${doc ? "Replace file" : "Choose .docx file"}
           <input type="file" accept=".docx" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.handleDocxUpload('${type}', this.files[0])" /></label>
@@ -1856,7 +1906,33 @@ function templateEditorHtml(type) {
       ${flash && flash.error ? `<div class="mt-2">${errorNote("Couldn't read that file — please upload a .docx Word document.")}</div>` : ""}
       ${flash && !flash.error ? `<p class="text-xs mt-2 row items-center gap-1" style="color:var(--green)">${icon("check", 12)} Loaded ${flash.count} question${flash.count !== 1 ? "s" : ""} from ${esc(flash.fileName)} — review below, then save.</p>` : ""}
     </div>
-    ${fields.length === 0 ? `<p class="text-sm mb-4" style="color:var(--ink-soft)">No fields yet — add questions below.</p>` : `
+    ${preview ? `<div class="mb-4">
+      <div class="word-toolbar">
+        ${icon("file", 15)}
+        <span class="cra-display text-sm">${esc(reportTypeLabel(type))}.docx</span>
+        <span class="word-tab active">Preview — read only</span>
+      </div>
+      <div class="word-ribbon"><span class="text-xs" style="color:var(--ink-soft)">${icon("eye", 12)} This is what the ${esc(templateAudienceLabel(type))} will see and fill in — it can't be edited here. Use the questions list below to add, remove or reorder fields.</span></div>
+      <div class="word-page-wrap">
+        <div class="word-page" style="pointer-events:none">
+          <style>
+            .word-page table { width:100%; border-collapse:collapse; margin:8px 0 16px 0; }
+            .word-page table th, .word-page table td { border:1px solid #c7c1da; padding:6px 8px; font-size:11px; text-align:left; vertical-align:top; }
+            .word-page table th { background:#232a52; color:#ffffff; text-transform:uppercase; font-size:10px; letter-spacing:0.03em; }
+            .word-page table tr:nth-child(even) td { background:#f6f4ec; }
+            .word-page p { margin:0 0 10px 0; font-size:12.5px; line-height:1.6; }
+            .word-page strong { font-weight:700; }
+            .word-page em { color:#6b6578; font-style:italic; }
+            .word-page h1, .word-page h2, .word-page h3 { font-family:'Fraunces',Georgia,serif; margin:16px 0 8px; color:#232a52; }
+            .word-page .docx-banner { background:#232a52; color:#ffffff; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; text-align:center; padding:8px 10px; margin:18px 0 12px; font-size:12px; }
+          </style>
+          <div class="docx-banner" style="margin:0 0 18px 0">${esc(reportTypeLabel(type))}</div>
+          ${preview.html}
+        </div>
+      </div>
+    </div>` : ""}
+    ${leftoverFields.length === 0 && fields.length === 0 ? `<p class="text-sm mb-4" style="color:var(--ink-soft)">No fields yet — add questions below.</p>` : `
+    <div class="cra-label mb-2" style="color:var(--ink-soft)">${preview ? "All questions (drag to manage)" : "Questions"}</div>
     <div class="space-y-2 mb-4">
       ${fields.map((f, i) => `<div class="row items-center gap-2 p-2" style="border:1px solid var(--line);border-radius:8px">${icon("grip", 14)}<span class="cra-mono text-xs" style="width:20px;color:var(--ink-soft)">${String(i + 1).padStart(2, "0")}</span><span class="text-sm font-medium flex-1"${f.help ? ` title="${esc(f.help)}"` : ""}>${esc(f.label)}</span>${badge("violet", FIELD_TYPES.find((t) => t.value === f.type)?.label || f.type)}<button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.removeTemplateField('${type}','${f.id}')">${icon("trash", 13)}</button></div>`).join("")}
     </div>`}
