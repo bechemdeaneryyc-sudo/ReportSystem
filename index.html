@@ -584,6 +584,8 @@ const App = {
   templateUploadFlash: null,
   adminTemplateScope: null,
   adminRosterScope: null,
+  themeDraft: null,
+  newAreaName: "",
   submitState: { done: false },
   submitType: null,
   editingReportId: null,
@@ -834,7 +836,7 @@ const App = {
     return [];
   },
 
-  setView(v) { this.view = v; this.sidebarOpen = false; this.templateSavedFlash = null; this.render(); },
+  setView(v) { AP = null; this.view = v; this.sidebarOpen = false; this.templateSavedFlash = null; this.render(); },
   toggleSidebar(open) { this.sidebarOpen = open; this.render(); },
 
   async createLocal(name, location) {
@@ -921,6 +923,68 @@ const App = {
   },
   async toggleBalanceEditUnlock(userId) {
     await this.updateOrg((o) => { const u = o.users.find((x) => x.id === userId); if (u) u.balanceEditUnlocked = !u.balanceEditUnlocked; return o; });
+  },
+
+  // ---- IT admin: areas of report ----
+  async saveAreas(list) { await this.updateOrg((o) => { o.config = o.config || {}; o.config.areas = list; return o; }); },
+  addArea(label) {
+    const l = String(label || "").trim();
+    if (!l) { alert("Type the name of the area first."); return; }
+    const areas = plainAreas();
+    if (areas.some((a) => a.label.toLowerCase() === l.toLowerCase())) { alert("That area already exists."); return; }
+    areas.push({ key: "a_" + uid(), label: l, hasEvents: true });
+    this.newAreaName = "";
+    return this.saveAreas(areas);
+  },
+  renameArea(key, label) {
+    const l = String(label || "").trim();
+    if (!l) { this.render(); return; }
+    return this.saveAreas(plainAreas().map((a) => (a.key === key ? { ...a, label: l } : a)));
+  },
+  removeArea(key) { return this.saveAreas(plainAreas().filter((a) => a.key !== key)); },
+  moveArea(key, dir) {
+    const a = plainAreas(); const i = a.findIndex((x) => x.key === key); const j = i + dir;
+    if (i < 0 || j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]];
+    return this.saveAreas(a);
+  },
+  resetAreas() { return this.updateOrg((o) => { if (o.config) delete o.config.areas; return o; }); },
+
+  // ---- Theme of the year ----
+  themeDraftGet() {
+    if (!this.themeDraft) {
+      const u = this.currentUser(); const t = (themeInfo().status === "active" || (u && u.isAdmin)) ? (themeRec() || {}) : {};
+      this.themeDraft = { text: t.text || "", from: t.from || "", to: t.to || "" };
+    }
+    return this.themeDraft;
+  },
+  async saveTheme() {
+    const user = this.currentUser(); if (!canEditTheme(user)) return;
+    const d = this.themeDraftGet(); const text = d.text.trim();
+    if (!text) { alert("Enter the theme of the year."); return; }
+    if (user.isAdmin && d.from && d.to && d.to < d.from) { alert("The year can't end before it starts."); return; }
+    const status = themeInfo().status;
+    await this.updateOrg((o) => {
+      o.config = o.config || {}; o.config.themes = o.config.themes || {}; const pid = user.parishId; const old = o.config.themes[pid] || {};
+      const fresh = !old.id || (user.isAdmin ? (status !== "active" && text !== old.text) : status !== "active");
+      o.config.themes[pid] = {
+        id: fresh ? uid() : old.id, text,
+        from: user.isAdmin ? d.from : (fresh ? "" : (old.from || "")), to: user.isAdmin ? d.to : (fresh ? "" : (old.to || "")),
+        unlocked: fresh ? false : !!old.unlocked, enteredByName: fresh ? user.name : (old.enteredByName || user.name), enteredAt: fresh ? Date.now() : (old.enteredAt || Date.now()),
+      };
+      return o;
+    });
+    this.themeDraft = null; this.render();
+  },
+  async toggleThemeUnlock() {
+    if (!this.currentUser().isAdmin) return;
+    await this.updateOrg((o) => { const pid = this.currentUser().parishId; const th = o.config && o.config.themes && o.config.themes[pid]; if (th) th.unlocked = !th.unlocked; return o; });
+  },
+  async startNewYear() {
+    if (!this.currentUser().isAdmin) return;
+    if (!confirm("Start a new year? The parish theme is cleared so the parish secretary can enter a new one. Past action plans stay on record.")) return;
+    await this.updateOrg((o) => { const pid = this.currentUser().parishId; if (o.config && o.config.themes) delete o.config.themes[pid]; return o; });
+    this.themeDraft = null; this.render();
   },
 
   goSubmit(type) {
@@ -1661,7 +1725,7 @@ function reportV2BodyHtml(report) {
   h += sec("Secretariat", `${kv("Email", f.email)}${table(["Name", "Position", "Phone number"], (f.executives || []).map((e) => [val(e.name), val(e.position), val(e.phone)]), [])}`);
 
   if (report.type !== "financial") {
-    const areas = REPORT_AREAS.filter((a) => f.areas && f.areas[a.key]);
+    const areas = reportAreasOf(f).filter((a) => f.areas && f.areas[a.key]);
     h += sec("Areas of report", `<div style="font-size:12.5px;line-height:1.7">${areas.map((a) => `<div><b style="color:#a3812f">${a.numeral}.</b> ${esc(a.key === "other" ? (f.otherAreaName ? `Other — ${f.otherAreaName}` : "Other") : a.label)}</div>`).join("") || "—"}</div>`);
     const eventAreas = areas.filter((a) => a.hasEvents);
     if (eventAreas.length) {
@@ -1753,7 +1817,7 @@ function buildReportTextV2(report, ctx) {
   L.push("Executives:"); (f.executives || []).forEach((e) => L.push(`  - ${v(e.name)} | ${v(e.position)} | ${v(e.phone)}`));
   L.push("");
   if (report.type !== "financial") {
-    REPORT_AREAS.filter((a) => a.hasEvents && f.areas && f.areas[a.key]).forEach((a) => {
+    reportAreasOf(f).filter((a) => a.hasEvents && f.areas && f.areas[a.key]).forEach((a) => {
       L.push(`${a.numeral}. ${a.key === "other" ? (f.otherAreaName || "Other") : a.label}`);
       ((f.events && f.events[a.key]) || []).forEach((ev, i) => {
         L.push(`  Event ${i + 1}`); line("   Name / focus", ev.name); line("   Participants", ev.participants); line("   Resource persons", ev.resource); line("   Level", ev.level);
@@ -1882,7 +1946,7 @@ function reportViewModalHtml(report) {
 /*  Structured report form (Secretariat report + Financial report)       */
 /* ==================================================================== */
 
-const REPORT_AREAS = [
+const LEGACY_AREAS = [
   { key: "faith", numeral: "i", label: "Faith Information Activities", hasEvents: true },
   { key: "growth", numeral: "ii", label: "Growth & Maturation Activities", hasEvents: true },
   { key: "skills", numeral: "iii", label: "Skills Development Activities", hasEvents: true },
@@ -1891,6 +1955,35 @@ const REPORT_AREAS = [
   { key: "action", numeral: "vi", label: "Action Plan", hasEvents: false },
   { key: "other", numeral: "vii", label: "Other", hasEvents: true },
 ];
+// Areas the IT admin can add/remove (Report settings). The Action Plan now has its own tab,
+// so it is no longer one of the tickable areas for new reports (old reports still show it).
+const DEFAULT_AREAS = LEGACY_AREAS.filter((a) => a.key !== "action").map(({ key, label, hasEvents }) => ({ key, label, hasEvents }));
+function romanNum(n) { const t = [[10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]]; let s = ""; t.forEach(([v, r]) => { while (n >= v) { s += r; n -= v; } }); return s; }
+function withNumerals(list) { return list.map((a, i) => ({ ...a, numeral: romanNum(i + 1) })); }
+function cfg() { return (App.org && App.org.config) || {}; }
+function plainAreas() { return currentAreas().map(({ key, label, hasEvents }) => ({ key, label, hasEvents })); }
+function currentAreas() { return withNumerals(cfg().areas || DEFAULT_AREAS); }
+// A report keeps a snapshot of the areas it was filled against, so later edits by the admin never change old reports.
+function reportAreasOf(f) { return withNumerals(f.areaDefs || LEGACY_AREAS); }
+
+/* ---- Theme of the year (entered once by the parish Secretary, locked, applies to all locals) ---- */
+// The theme belongs to the parish: its top-level Secretary enters it once and it applies to every local under that parish.
+function myParishId() { const u = App.currentUser(); return u ? u.parishId : null; }
+function themeRec(pid) { return (cfg().themes || {})[pid === undefined ? myParishId() : pid]; }
+function themeInfo() {
+  const t = themeRec();
+  if (!t || !t.text) return { status: "none" };
+  if (t.to && todayISODate() > t.to) return { ...t, status: "expired" };
+  return { ...t, status: "active" };
+}
+function activeThemeText() { const t = themeInfo(); return t.status === "active" ? t.text : ""; }
+// The IT admin can always set it. Otherwise only the parish-level Secretary (the highest secretary) may enter it,
+// once; after that it is locked unless the admin unlocks it ("gives access to change").
+function canEditTheme(user) {
+  if (user.isAdmin) return true;
+  if (user.position !== "Secretary" || user.level !== "parish") return false;
+  return themeInfo().status !== "active" || !!themeInfo().unlocked;
+}
 const ACTION_AREA_LABELS = ["Faith Information Activities", "Growth & Maturation Activities", "Skills Development Activities", "World Youth Day Celebration", "Meeting"];
 const PERIOD_TYPES = ["Weekly", "Monthly", "Quarterly", "Annual", "Final Report", "Current programme"];
 const MEMBERSHIP_OPTIONS = ["Parish", "Deanery"];
@@ -1933,14 +2026,15 @@ function newReportDraft(type, user) {
   const prevs = App.org.reports.filter((r) => r.version === 2 && r.form && r.ownerLevel === level && r.ownerId === id).sort((a, b) => (a.submittedAt || 0) - (b.submittedAt || 0));
   const prev = prevs[prevs.length - 1];
   const emptySign = () => ({ name: "", position: "", date: "" });
+  const areaDefs = type === "financial" ? null : currentAreas();
   return {
-    type, theme: prev ? (prev.form.theme || "") : "",
+    type, theme: activeThemeText(), areaDefs,
     periodType: "", periodFrom: "", periodTo: "",
     membership: prev ? (prev.form.membership || "") : "",
     email: user.email || "", executives,
-    areas: { faith: false, growth: false, skills: false, wyd: false, meeting: false, action: false, other: false },
+    areas: Object.fromEntries((areaDefs || []).map((a) => [a.key, false])),
     otherAreaName: "",
-    events: { faith: [], growth: [], skills: [], wyd: [], other: [] },
+    events: Object.fromEntries((areaDefs || []).filter((a) => a.hasEvents).map((a) => [a.key, []])),
     meetings: [], actionPlan: [],
     income: [ROW_FACTORIES.income()], expenditure: [ROW_FACTORIES.expenditure()], budget: [ROW_FACTORIES.budget()],
     openingBalance: type === "financial" ? App.getOpeningBalanceFor(user, null) : 0,
@@ -2047,7 +2141,7 @@ function rdMeetingCard(i) {
 
 function rdSharedSections(nextNum) {
   let h = "";
-  h += rdSection(nextNum(), "Theme of the year", rdText("theme", "Theme", { placeholder: "Theme of the year" }));
+  h += rdSection(nextNum(), "Theme of the year", themeCardHtml(App.currentUser(), { bare: true, savedTheme: App.editingReportId ? RD.theme : null }));
   h += rdSection(nextNum(), "Period of report", `<div class="rd-grid-3">
       ${rdSelect("periodType", "Period", PERIOD_TYPES, { placeholder: "Select period…", rerender: true })}
       ${rdText("periodFrom", "From", { type: "date" })}
@@ -2075,10 +2169,149 @@ function rdSignoffSection(n) {
     "Appears at the bottom of the report. Signatures show automatically if the person has uploaded one to their profile; otherwise there's a line to sign by hand on the printed PDF.");
 }
 
+
+/* ==================================================================== */
+/*  Theme of the year card, Action plan tab, Report settings (IT admin)   */
+/* ==================================================================== */
+
+function themeCardHtml(user, o = {}) {
+  const t = themeRec() || {}; const info = themeInfo();
+  const fmt = (iso) => (iso ? displayShort(iso) : "");
+  const wrap = o.bare ? "" : "cra-card cra-card-accent p-5 mb-4";
+  if (o.savedTheme !== undefined && o.savedTheme !== null) {
+    return `<div class="${wrap}"><div class="cra-display text-xl" style="color:var(--violet)">“${esc(o.savedTheme || "—")}”</div><p class="text-xs mt-1" style="color:var(--ink-soft)">The theme this report was filed under.</p></div>`;
+  }
+  const range = (t.from || t.to) ? `${fmt(t.from) || "…"} – ${fmt(t.to) || "no end date"}` : "No end date set";
+  let top;
+  if (info.status === "active") top = `<div class="row items-center gap-2 mb-1"><span class="cra-label" style="margin:0">Theme of the year</span>${badge("green", "Active")}</div><div class="cra-display text-xl" style="color:var(--violet)">“${esc(t.text)}”</div><div class="text-xs mt-1" style="color:var(--ink-soft)">${esc(range)}</div>`;
+  else if (info.status === "expired") top = `<div class="row items-center gap-2 mb-1"><span class="cra-label" style="margin:0">Theme of the year</span>${badge("wine", "Year ended")}</div><div class="text-sm" style="color:var(--ink-soft)">The year for “${esc(t.text)}” ended on ${esc(fmt(t.to))}. A new theme is needed.</div>`;
+  else top = `<div class="row items-center gap-2 mb-1"><span class="cra-label" style="margin:0">Theme of the year</span>${badge("gold", "Not set")}</div><div class="text-sm" style="color:var(--ink-soft)">No theme of the year has been set yet.</div>`;
+
+  const canEdit = canEditTheme(user);
+  // The admin manages the theme on the Report settings page; elsewhere they just see it.
+  const showForm = canEdit && (o.admin || !user.isAdmin);
+  let form = "";
+  if (showForm) {
+    const d = App.themeDraftGet();
+    form = `<div class="mt-4 space-y-3" style="border-top:1px solid var(--line);padding-top:0.9rem">
+      ${fieldWrap(info.status === "active" ? "Change theme" : "Theme of the year", `<input class="cra-input" value="${esc(d.text)}" placeholder="e.g. Youth, rise up and walk with Christ" oninput="App.themeDraftGet().text=this.value" />`, user.isAdmin ? "" : "Enter it once — it is then locked and fills in automatically on every report and action plan, for the parish and all its locals.")}
+      ${user.isAdmin ? `<div class="rd-grid-2">${fieldWrap("Year starts", `<input class="cra-input" type="date" value="${esc(d.from)}" oninput="App.themeDraftGet().from=this.value" />`)}${fieldWrap("Year ends", `<input class="cra-input" type="date" value="${esc(d.to)}" oninput="App.themeDraftGet().to=this.value" />`, "After this date the theme lapses and a new one must be entered.")}</div>` : ""}
+      ${btnHtml({ variant: "primary", label: info.status === "active" ? "Save theme" : "Set theme", iconName: "check", attrs: `type="button" onclick="App.saveTheme()"` })}
+    </div>`;
+  } else if (info.status === "active" && !user.isAdmin) {
+    form = `<p class="text-xs mt-3" style="color:var(--ink-soft)">Set for the whole parish and its locals — only the IT admin can change it.</p>`;
+  } else if (info.status !== "active" && !canEdit) {
+    form = `<p class="text-xs mt-3" style="color:var(--ink-soft)">Waiting for the parish Secretary to enter the theme of the year.</p>`;
+  } else if (user.isAdmin && !o.admin) {
+    form = `<div class="mt-3">${btnHtml({ variant: "ghost", label: "Manage in Report settings", iconName: "cog", size: 13, attrs: `type="button" onclick="App.setView('reportsettings')"` })}</div>`;
+  }
+  let adminCtl = "";
+  if (o.admin && info.status !== "none") {
+    adminCtl = `<div class="row items-center gap-3 wrap mt-3">
+      <label class="row items-center gap-2 text-sm" style="cursor:pointer"><input type="checkbox" ${t.unlocked ? "checked" : ""} onchange="App.toggleThemeUnlock()" /> Let secretaries change the theme</label>
+      ${btnHtml({ variant: "danger", label: "Start a new year", size: 13, attrs: `type="button" onclick="App.startNewYear()"` })}
+    </div>`;
+  }
+  return `<div class="${wrap}">${top}${form}${adminCtl}</div>`;
+}
+
+let AP = null; // action plan being edited { rows, saved }
+const AP_ROW = () => ({ area: "", activity: "", timeline: "" });
+function currentPlan(level, id) {
+  const t = themeRec(); if (!t || !t.id) return null;
+  return (App.org.actionPlans || []).find((p) => p.ownerLevel === level && p.ownerId === id && p.themeId === t.id) || null;
+}
+function apInit(user) {
+  const { level, id } = App.scopeFor(user); const p = currentPlan(level, id);
+  AP = { rows: p && p.rows.length ? JSON.parse(JSON.stringify(p.rows)) : [AP_ROW()], saved: false };
+}
+function apSet(i, f, v) { AP.rows[i][f] = v; }
+function apAdd() { AP.rows.push(AP_ROW()); rdRender(); }
+function apRemove(i) { AP.rows.splice(i, 1); if (!AP.rows.length) AP.rows.push(AP_ROW()); rdRender(); }
+async function apSave() {
+  const user = App.currentUser(); const t = themeRec();
+  if (themeInfo().status !== "active") { alert("Set the theme of the year first."); return; }
+  const rows = AP.rows.filter(nonEmptyRow); const { level, id } = App.scopeFor(user);
+  await App.updateOrg((o) => {
+    o.actionPlans = o.actionPlans || [];
+    let p = o.actionPlans.find((x) => x.ownerLevel === level && x.ownerId === id && x.themeId === t.id);
+    if (!p) { p = { id: uid(), ownerLevel: level, ownerId: id, themeId: t.id, createdAt: Date.now() }; o.actionPlans.push(p); }
+    p.theme = t.text; p.rows = rows; p.updatedBy = user.id; p.updatedByName = user.name; p.updatedAt = Date.now();
+    return o;
+  });
+  apInit(user); AP.saved = true; App.render();
+  setTimeout(() => { if (AP) { AP.saved = false; App.render(); } }, 3000);
+}
+function planTableHtml(rows) {
+  const td = "padding:6px 8px;font-size:13px;border-bottom:1px solid var(--line);vertical-align:top";
+  if (!rows || !rows.length) return `<p class="text-sm" style="color:var(--ink-soft)">No action plan entered yet.</p>`;
+  return `<div class="overflow-x-auto"><table class="text-sm" style="width:100%;border-collapse:collapse"><thead><tr style="background:#f5f3ea"><th class="px-3 py-2 cra-label">Activity area</th><th class="px-3 py-2 cra-label">Planned activity</th><th class="px-3 py-2 cra-label">Timeline</th></tr></thead><tbody>${rows.map((r) => `<tr><td style="${td}">${esc(r.area || "—")}</td><td style="${td};white-space:pre-wrap">${esc(r.activity || "—")}</td><td style="${td}">${esc(r.timeline || "—")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function actionPlanViewHtml(user) {
+  const org = App.org; const info = themeInfo(); const t = themeRec() || {};
+  const canEditPlan = user.position === "Secretary";
+  let h = pageHeader("Plan", "Action plan", "What your council plans to do this year. The theme of the year fills in automatically.");
+  h += themeCardHtml(user);
+  if (info.status !== "active") return h + `<p class="text-sm" style="color:var(--ink-soft)">The action plan opens once the parish Secretary has entered the theme of the year.</p>`;
+
+  const parish = org.parishes.find((p) => p.id === user.parishId);
+  let scopes = [];
+  if (user.isAdmin || (user.position === "President" && user.level === "parish")) {
+    scopes.push({ level: "parish", id: user.parishId, name: parish ? parish.name : "Parish" });
+    org.locals.filter((l) => l.parishId === user.parishId).forEach((l) => scopes.push({ level: "local", id: l.id, name: l.name }));
+  } else {
+    const s = App.scopeFor(user); const l = user.localId ? org.locals.find((x) => x.id === user.localId) : null;
+    scopes.push({ level: s.level, id: s.id, name: l ? l.name : (parish ? parish.name : "Your council") });
+  }
+  const mine = App.scopeFor(user);
+
+  if (canEditPlan) {
+    const labels = [...new Set([...currentAreas().map((a) => a.label), ...AP.rows.map((r) => r.area).filter(Boolean)])];
+    h += `<div class="cra-card p-5 mb-4"><div class="row items-center justify-between mb-3"><h3 class="cra-display text-lg">Your action plan</h3>${AP.saved ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}</div>
+      ${rdHead(["Activity area", "Planned activity", "Timeline"])}
+      ${AP.rows.map((r, i) => `<div class="rd-row mb-2"><div class="rd-cell"><select class="cra-select" onchange="apSet(${i},'area',this.value)"><option value="">Activity area…</option>${labels.map((l) => `<option value="${esc(l)}" ${r.area === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>
+        <div class="rd-cell"><input class="cra-input" value="${esc(r.activity)}" placeholder="Planned activity" oninput="apSet(${i},'activity',this.value)" /></div>
+        <div class="rd-cell"><input class="cra-input" value="${esc(r.timeline)}" placeholder="Timeline" oninput="apSet(${i},'timeline',this.value)" /></div>
+        <button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" title="Remove" onclick="apRemove(${i})">${icon("trash", 13)}</button></div>`).join("")}
+      <button type="button" class="cra-btn cra-btn-ghost cra-btn-sm mt-2" onclick="apAdd()">${icon("plus", 12)} Add action</button>
+      <div class="mt-4">${btnHtml({ variant: "primary", label: "Save action plan", iconName: "check", attrs: `type="button" onclick="apSave()"` })}</div></div>`;
+    scopes = scopes.filter((s) => !(s.level === mine.level && s.id === mine.id));
+  }
+  scopes.forEach((s) => {
+    const p = currentPlan(s.level, s.id);
+    h += `<div class="cra-card p-5 mb-4"><div class="row items-center justify-between mb-3 wrap gap-2"><h3 class="cra-display text-lg">${esc(s.name)}</h3>${p ? `<span class="text-xs" style="color:var(--ink-soft)">Updated by ${esc(p.updatedByName)} · ${new Date(p.updatedAt).toLocaleDateString()}</span>` : badge("gold", "Not submitted")}</div>${planTableHtml(p ? p.rows : [])}</div>`;
+  });
+  const all = (canEditPlan ? [mine, ...scopes] : scopes);
+  const past = (org.actionPlans || []).filter((p) => p.themeId !== t.id && all.some((s) => s.level === p.ownerLevel && s.id === p.ownerId));
+  if (past.length) h += `<details class="cra-card p-4 mb-4"><summary class="font-semibold text-sm" style="cursor:pointer">Previous years (${past.length})</summary>${past.slice().reverse().map((p) => `<div class="mt-4"><div class="cra-label mb-1">“${esc(p.theme)}”</div>${planTableHtml(p.rows)}</div>`).join("")}</details>`;
+  return h;
+}
+
+function reportSettingsViewHtml() {
+  const user = App.currentUser(); const areas = currentAreas();
+  const hint = (a) => a.key === "meeting" ? badge("violet", "Meetings form") : a.key === "other" ? badge("violet", "Asks for a name") : "";
+  return `${pageHeader("IT Admin", "Report settings", "Choose which areas of report secretaries can tick, and manage the theme of the year.")}
+  ${themeCardHtml(user, { admin: true })}
+  <div class="cra-card cra-card-accent p-5 mb-4">
+    <h3 class="cra-display text-lg mb-1">Areas of report</h3>
+    <p class="text-xs mb-4" style="color:var(--ink-soft)">These are the areas secretaries tick in a report. Changes apply to new reports — reports already submitted keep the areas they were filed with. The Action Plan has its own tab.</p>
+    <div class="space-y-2">${areas.map((a, i) => `<div class="row items-center gap-2"><span class="cra-mono font-semibold" style="color:var(--gold);width:2.2rem">${a.numeral}.</span>
+      <input class="cra-input" value="${esc(a.label)}" onchange="App.renameArea('${a.key}', this.value)" />
+      ${hint(a)}
+      <button type="button" class="cra-btn cra-btn-ghost cra-btn-sm" ${i === 0 ? "disabled" : ""} onclick="App.moveArea('${a.key}',-1)" title="Move up">↑</button>
+      <button type="button" class="cra-btn cra-btn-ghost cra-btn-sm" ${i === areas.length - 1 ? "disabled" : ""} onclick="App.moveArea('${a.key}',1)" title="Move down">↓</button>
+      <button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" title="Remove area" onclick="if(confirm('Remove this area from new reports? Reports already submitted keep it.')) App.removeArea('${a.key}')">${icon("trash", 13)}</button></div>`).join("") || `<p class="text-sm" style="color:var(--ink-soft)">No areas yet — add one below.</p>`}</div>
+    <div class="row items-center gap-2 mt-4"><input class="cra-input" placeholder="New area of report, e.g. Youth Outreach" value="${esc(App.newAreaName)}" oninput="App.newAreaName=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();App.addArea(App.newAreaName)}" />
+      ${btnHtml({ variant: "primary", label: "Add area", iconName: "plus", attrs: `type="button" onclick="App.addArea(App.newAreaName)"` })}</div>
+    ${cfg().areas ? `<button type="button" class="cra-btn cra-btn-ghost cra-btn-sm mt-4" onclick="if(confirm('Restore the original list of areas?')) App.resetAreas()">Restore default areas</button>` : ""}
+  </div>`;
+}
+
 function submitReportFormHtml(type) {
   const user = App.currentUser();
   if (!RD || RD.type !== type) RD = newReportDraft(type, user);
   const isFin = type === "financial";
+  if (!isFin) { RD.areaDefs = withNumerals(RD.areaDefs || LEGACY_AREAS); RD.areas = RD.areas || {}; RD.events = RD.events || {}; RD.areaDefs.forEach((a) => { if (a.hasEvents && !RD.events[a.key]) RD.events[a.key] = []; }); }
   const editing = App.editingReportId;
   const done = App.submitState.done;
   let n = 0; const nextNum = () => ++n;
@@ -2087,12 +2320,12 @@ function submitReportFormHtml(type) {
 
   if (!isFin) {
     // 5. Areas of report
-    html += rdSection(nextNum(), "Areas of report", `<div class="rd-checks">${REPORT_AREAS.map((a) => `<label class="rd-check"><input type="checkbox" ${RD.areas[a.key] ? "checked" : ""} onchange="rdToggleArea('${a.key}', this.checked)" /><span><span class="cra-mono" style="color:var(--gold)">${a.numeral}.</span> ${esc(a.label)}</span></label>`).join("")}</div>
+    html += rdSection(nextNum(), "Areas of report", `<div class="rd-checks">${RD.areaDefs.map((a) => `<label class="rd-check"><input type="checkbox" ${RD.areas[a.key] ? "checked" : ""} onchange="rdToggleArea('${a.key}', this.checked)" /><span><span class="cra-mono" style="color:var(--gold)">${a.numeral}.</span> ${esc(a.label)}</span></label>`).join("")}</div>
       ${RD.areas.other ? `<div class="mt-3">${rdText("otherAreaName", "Area of report (specify)", { placeholder: "Enter the area of report" })}</div>` : ""}`,
       "Tick every area you are reporting on — a section opens below for each one.");
 
     // 6. Event details
-    const eventAreas = REPORT_AREAS.filter((a) => a.hasEvents && RD.areas[a.key]);
+    const eventAreas = RD.areaDefs.filter((a) => a.hasEvents && RD.areas[a.key]);
     html += rdSection(nextNum(), "Event details", eventAreas.length ? eventAreas.map((a) => {
       const title = a.key === "other" ? (RD.otherAreaName.trim() || "Other") : a.label;
       return `<div class="mb-6"><div class="cra-display text-base mb-3" style="color:var(--violet);border-bottom:1px solid var(--line);padding-bottom:0.4rem"><span class="cra-mono" style="color:var(--gold)">${a.numeral}.</span> ${esc(title)}</div>
@@ -2151,13 +2384,14 @@ function submitReportFormHtml(type) {
 function rdSubmit() {
   const d = JSON.parse(JSON.stringify(RD));
   const isFin = d.type === "financial";
+  if (!App.editingReportId) { const th = activeThemeText(); if (!th) { alert("The theme of the year hasn't been set yet. The parish Secretary enters it once and it then applies to every local."); return; } d.theme = th; }
   if (!d.periodType) { alert("Please choose the period of report."); return; }
   if (!d.signoff.prepared.name.trim()) { alert("Please fill in who prepared the report."); return; }
   d.executives = d.executives.filter(nonEmptyRow);
   if (!isFin) {
-    if (!REPORT_AREAS.some((a) => d.areas[a.key])) { alert("Pick at least one area of report."); return; }
+    if (!d.areaDefs.some((a) => d.areas[a.key])) { alert("Pick at least one area of report."); return; }
     const auto = autoLevelFor(d.membership);
-    REPORT_AREAS.forEach((a) => {
+    d.areaDefs.forEach((a) => {
       if (a.hasEvents) d.events[a.key] = d.areas[a.key] ? d.events[a.key].filter(nonEmptyRow).map((ev) => ({ ...ev, level: ev.level || auto })) : [];
     });
     d.meetings = d.areas.meeting ? d.meetings.filter(nonEmptyRow) : [];
@@ -2170,7 +2404,7 @@ function rdSubmit() {
     d.budget = d.periodType === "Final Report" ? d.budget.filter(nonEmptyRow).map((b) => ({ ...b, total: num0(b.unitCost) * num0(b.qty) })) : [];
     const t = rdTotals(d);
     d.totalIncome = t.income; d.totalExpenditure = t.exp; d.closingBalance = t.closing; d.budgetTotal = t.budget;
-    delete d.areas; delete d.events; delete d.meetings; delete d.actionPlan; delete d.otherAreaName;
+    delete d.areas; delete d.events; delete d.meetings; delete d.actionPlan; delete d.otherAreaName; delete d.areaDefs;
   }
   App.submitReportV2(d);
 }
@@ -2529,9 +2763,11 @@ function renderApp() {
   if (isPresident) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
   if (isAdmin) nav.push({ id: "reports", label: "All reports", iconName: "file" });
   if (isAdmin) nav.push({ id: "roster", label: "Executives roster", iconName: "userPlus" });
+  if (isAdmin) nav.push({ id: "reportsettings", label: "Report settings", iconName: "clipboard" });
   reportTypes.forEach((type) => nav.push({ id: `submit:${type}`, label: `Submit ${reportTypeLabel(type).split(" ")[0].toLowerCase()}`, iconName: REPORT_TYPE_ICON[type] }));
   if (reportTypes.length) nav.push({ id: "submissions", label: "My submissions", iconName: "scroll" });
   if (isAdmin) nav.push({ id: "parishsettings", label: "Parish settings", iconName: "cog" });
+  nav.push({ id: "actionplan", label: "Action plan", iconName: "clipboard" });
   nav.push({ id: "structure", label: "Structure", iconName: "users" });
   nav.push({ id: "profile", label: "My profile", iconName: "pen" });
 
@@ -2547,6 +2783,11 @@ function renderApp() {
     content = parishSettingsViewHtml();
   } else if (App.view === "roster" && isAdmin) {
     content = rosterAdminViewHtml();
+  } else if (App.view === "reportsettings" && isAdmin) {
+    content = reportSettingsViewHtml();
+  } else if (App.view === "actionplan") {
+    if (!AP && user.position === "Secretary") apInit(user);
+    content = actionPlanViewHtml(user);
   } else if (App.view === "profile") {
     content = profileViewHtml();
   } else if (App.view === "locals" && (isAdmin || (isPresident && user.level === "parish"))) {
