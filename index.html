@@ -173,6 +173,22 @@ button { border: none; background: none; }
 .stepdot { height: 6px; border-radius: 999px; transition: all .2s; }
 .sig-thumb { max-height: 46px; max-width: 140px; border-bottom: 1px solid var(--ink); }
 ::selection { background: rgba(115,42,48,0.2); }
+
+.rd-grid-2, .rd-grid-3 { display: grid; gap: 0.75rem; grid-template-columns: 1fr; }
+@media (min-width: 640px) { .rd-grid-2 { grid-template-columns: 1fr 1fr; } .rd-grid-3 { grid-template-columns: repeat(3, 1fr); } }
+.rd-subcard { border: 1px solid var(--line); border-radius: 8px; padding: 1rem; background: #fff; }
+.rd-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.rd-cell { flex: 1 1 140px; min-width: 0; }
+.rd-head { margin-bottom: 0.3rem; }
+@media (max-width: 639px) { .rd-head { display: none; } }
+.rd-checks { display: grid; gap: 0.5rem; grid-template-columns: 1fr; }
+@media (min-width: 640px) { .rd-checks { grid-template-columns: 1fr 1fr; } }
+.rd-check { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; font-size: 0.9rem; }
+.rd-check input { width: 16px; height: 16px; accent-color: var(--wine); flex-shrink: 0; }
+.rd-total { display: flex; justify-content: flex-end; gap: 0.75rem; font-size: 0.9rem; margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--line); }
+.rd-total-cell { background: #f5f3ea; font-weight: 600; }
+.rd-balance-line { display: flex; justify-content: space-between; gap: 1rem; padding: 0.3rem 0; font-size: 0.9rem; }
+.cra-textarea { resize: vertical; }
 </style>
 </head>
 <body>
@@ -213,7 +229,6 @@ button { border: none; background: none; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-app-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-firestore-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-auth-compat.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.11.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script>
 
@@ -307,8 +322,8 @@ const FIELD_TYPES = [
   { value: "number", label: "Number" },
   { value: "date", label: "Date" },
 ];
-const REPORT_TYPE_LABELS = { program: "Programmes & Activities Report", meeting: "Meetings Report", financial: "Financial Report" };
-const REPORT_TYPE_TONE = { program: "violet", meeting: "wine", financial: "green" };
+const REPORT_TYPE_LABELS = { secretariat: "Secretariat Report", program: "Programmes & Activities Report", meeting: "Meetings Report", financial: "Financial Report" };
+const REPORT_TYPE_TONE = { secretariat: "violet", program: "violet", meeting: "wine", financial: "green" };
 // Executive-committee roster fields the Secretary sets once per term; every report
 // auto-fills matching "Role — Name" / "Role — Phone" fields from it. Ordered most-specific
 // first so e.g. "Financial Secretary" is matched before the plain "Secretary" role.
@@ -326,13 +341,13 @@ function matchRosterField(label) {
   }
   return null;
 }
-const REPORT_TYPE_ICON = { program: "clipboard", meeting: "users", financial: "wallet" };
+const REPORT_TYPE_ICON = { secretariat: "clipboard", program: "clipboard", meeting: "users", financial: "wallet" };
 
 // Which report types each position can submit — the Secretary chooses between a
 // Programme/Activities report and a Meetings report, each with its own admin-defined
 // question set, instead of one fixed combined form.
 function reportTypesForPosition(pos) {
-  if (pos === "Secretary") return ["program", "meeting"];
+  if (pos === "Secretary") return ["secretariat"];
   if (pos === "Financial Secretary" || pos === "Treasurer") return ["financial"];
   return [];
 }
@@ -869,15 +884,6 @@ const App = {
     return (l && l.reportHeading) || "";
   },
 
-  templateFor(type, scopeOverride) {
-    const { level, id } = scopeOverride || this.activeTemplateScope();
-    return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
-  },
-  templateForSubmit(type) {
-    const { level, id } = this.scopeFor(this.currentUser());
-    return this.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type) || null;
-  },
-
   // The financial secretary/treasurer's own chain of financial reports, oldest first,
   // used to auto-carry the running balance from one report to the next.
   myFinancialReports(user) {
@@ -886,25 +892,19 @@ const App = {
       .filter((r) => r.type === "financial" && r.ownerLevel === level && r.ownerId === id && r.submittedBy === user.id)
       .sort((a, b) => (a.submittedAt || 0) - (b.submittedAt || 0));
   },
-  // True once this financial secretary/treasurer has at least one report on record —
-  // after that their term opening balance is locked and only auto-updates from then on.
   hasFinancialHistory(user) { return this.myFinancialReports(user).length > 0; },
   // The executive-committee roster (name/phone per role) the IT admin set for this
-  // reporting scope (parish or local), used to auto-fill matching fields on every report.
+  // reporting scope (parish or local); it pre-fills the Secretariat section of every report.
   getRosterForScope(user) {
     const { level, id } = this.scopeFor(user);
     if (level === "parish") { const p = this.org.parishes.find((x) => x.id === id); return (p && p.executiveRoster) || {}; }
     const l = this.org.locals.find((x) => x.id === id);
     return (l && l.executiveRoster) || {};
   },
-  // Computes the opening balance that should be carried into a report: an admin-approved
-  // manual correction if one was made more recently than the last report (see
-  // toggleBalanceEditUnlock), otherwise the closing balance of the report immediately
-  // before it in this person's own chain, or their term opening balance if this is
-  // their first-ever report.
+  // Opening balance to carry into a financial report: an admin-approved manual correction
+  // if one is newer than the last report, otherwise the closing balance of the previous
+  // report in this person's chain, otherwise their term opening balance.
   getOpeningBalanceFor(user, editingReport) {
-    const template = this.templateForSubmit("financial");
-    const closingField = template ? template.fields.find((f) => /closing balance/i.test(f.label)) : null;
     let chain = this.myFinancialReports(user);
     if (editingReport) chain = chain.filter((r) => (r.submittedAt || 0) < (editingReport.submittedAt || 0));
     const last = chain[chain.length - 1];
@@ -915,119 +915,51 @@ const App = {
       const v = parseFloat(user.balanceOverride);
       if (!isNaN(v)) return v;
     }
-    if (last && closingField && last.data && last.data[closingField.id] !== undefined && last.data[closingField.id] !== "") {
-      const v = parseFloat(last.data[closingField.id]);
-      if (!isNaN(v)) return v;
-    }
+    if (last) { const c = closingBalanceOf(last); if (c !== null) return c; }
     const opening = parseFloat(user.termOpeningBalance);
     return isNaN(opening) ? 0 : opening;
   },
-  // Admin only — lets a Financial Secretary/Treasurer manually correct their current
-  // balance from their profile (e.g. to match actual cash on hand), even though it
-  // normally only moves automatically from each report's income and expenditure.
   async toggleBalanceEditUnlock(userId) {
     await this.updateOrg((o) => { const u = o.users.find((x) => x.id === userId); if (u) u.balanceEditUnlocked = !u.balanceEditUnlocked; return o; });
   },
 
-  openTemplateEditor(type) {
-    const t = this.templateFor(type);
-    this.templateDraft[type] = t ? t.fields.map((f) => ({ ...f })) : [];
-    this.templateDraftDoc[type] = t && t.docHtml ? { html: t.docHtml, fileName: t.docFileName || "template.docx" } : null;
-  },
-  setAdminTemplateScope(level, id) { this.adminTemplateScope = { level, id }; this.templateDraft = { program: null, meeting: null, financial: null }; this.render(); },
-
-  async handleDocxUpload(type, file) {
-    if (!file) return;
-    this.templateUploadFlash = null; this.render();
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const [htmlResult, textResult] = await Promise.all([mammoth.convertToHtml({ arrayBuffer }), mammoth.extractRawText({ arrayBuffer })]);
-      const fields = parseTemplateFields(textResult.value, type);
-      this.templateDraft[type] = fields;
-      this.templateDraftDoc[type] = { html: htmlResult.value, fileName: file.name };
-      this.templateUploadFlash = { type, count: fields.length, fileName: file.name };
-    } catch (err) { console.error(err); this.templateUploadFlash = { type, error: true }; }
-    this.render();
-  },
-
-  addTemplateField(type) {
-    const draft = this.templateDraftInput[type];
-    if (!draft.label.trim()) return;
-    this.templateDraft[type].push({ id: uid(), label: draft.label.trim(), type: draft.type });
-    this.templateDraftInput[type] = { label: "", type: "text" };
-    this.render();
-  },
-  removeTemplateField(type, id) { this.templateDraft[type] = this.templateDraft[type].filter((f) => f.id !== id); this.render(); },
-
-  async saveTemplate(type) {
-    const { level, id } = this.activeTemplateScope();
-    const fields = this.templateDraft[type];
-    const doc = this.templateDraftDoc[type];
-    await this.updateOrg((o) => {
-      const idx = o.templates.findIndex((t) => t.ownerLevel === level && t.ownerId === id && t.type === type);
-      const patch = { fields, docHtml: doc ? doc.html : null, docFileName: doc ? doc.fileName : null, updatedAt: Date.now() };
-      if (idx >= 0) Object.assign(o.templates[idx], patch);
-      else o.templates.push({ id: uid(), ownerLevel: level, ownerId: id, type, ...patch });
-      return o;
-    });
-    this.templateSavedFlash = type; this.templateUploadFlash = null; this.render();
-    setTimeout(() => { if (this.templateSavedFlash === type) { this.templateSavedFlash = null; this.render(); } }, 1800);
-  },
-  clearDocxUpload(type) { this.templateDraftDoc[type] = null; this.templateUploadFlash = null; this.render(); },
-  // Removes this scope's template entirely (not just its fields) — the questions
-  // disappear from the editor and from the submit form immediately. Reports already
-  // submitted keep their own saved copy of the questions, so past records are untouched.
-  async removeTemplate(type) {
-    const { level, id } = this.activeTemplateScope();
-    await this.updateOrg((o) => { o.templates = o.templates.filter((t) => !(t.ownerLevel === level && t.ownerId === id && t.type === type)); return o; });
-    this.templateDraft[type] = []; this.templateDraftDoc[type] = null; this.templateDraftInput[type] = { label: "", type: "text" };
-    this.templateSavedFlash = null; this.templateUploadFlash = null; this.render();
-  },
-  // IT admin only — wipes every template across every parish/local scope and type in one go.
-  async removeAllTemplates() {
-    await this.updateOrg((o) => { o.templates = []; return o; });
-    ["program", "meeting", "financial"].forEach((t) => { this.templateDraft[t] = []; this.templateDraftDoc[t] = null; this.templateDraftInput[t] = { label: "", type: "text" }; });
-    this.templateSavedFlash = null; this.templateUploadFlash = null; this.render();
-  },
-
   goSubmit(type) {
     this.submitType = type; this.editingReportId = null;
-    submitFormValues = {}; submitCustomFields = [];
+    RD = newReportDraft(type, this.currentUser());
     this.submitState = { done: false };
     this.view = "submit"; this.render();
   },
 
-  async submitReport(type, values, frequency, eventName, customFields, recordedDate, heading) {
+  async submitReportV2(form) {
     const user = this.currentUser();
     const { level, id } = this.scopeFor(user);
-    const template = this.templateForSubmit(type);
     const now = Date.now();
-    const recordedDateActual = todayISODate();
-    const effectiveDate = recordedDate || recordedDateActual;
-    const dateEdited = effectiveDate !== recordedDateActual;
-    const dateObj = (() => { const [y, m, d] = effectiveDate.split("-").map(Number); return new Date(y, (m || 1) - 1, d || 1); })();
-    const period = frequency === "weekly" ? `Week of ${dateObj.toLocaleDateString()}` : frequency === "monthly" ? dateObj.toLocaleDateString(undefined, { year: "numeric", month: "long" }) : frequency === "annual" ? `Year ${dateObj.getFullYear()}` : `${eventName || "Programme"} — ${dateObj.toLocaleDateString()}`;
     const editId = this.editingReportId;
+    const period = periodLabel(form);
     await this.updateOrg((o) => {
-      const fieldsSnapshot = [...(template ? template.fields : []), ...customFields];
       if (editId) {
         const r = o.reports.find((x) => x.id === editId);
-        if (r) { r.data = values; r.frequency = frequency; r.eventName = eventName; r.period = period; r.fieldsSnapshot = fieldsSnapshot; r.editedAt = now; r.recordedDateActual = recordedDateActual; r.recordedDate = effectiveDate; r.recordedDateEdited = dateEdited; r.heading = heading || ""; }
+        if (r) { r.form = form; r.period = period; r.frequency = form.periodType; r.editedAt = now; }
       } else {
         const regNo = String(o.reports.length + 1).padStart(4, "0");
         o.reports.push({
-          id: uid(), ownerLevel: level, ownerId: id, type,
+          id: uid(), version: 2, ownerLevel: level, ownerId: id, type: form.type,
           submittedBy: user.id, submitterName: user.name, position: user.position,
-          period, frequency, eventName, data: values, fieldsSnapshot, heading: heading || "",
-          recordedDateActual, recordedDate: effectiveDate, recordedDateEdited: dateEdited,
-          docHtmlSnapshot: template ? template.docHtml : null, docFileNameSnapshot: template ? template.docFileName : null,
-          submittedAt: now, regNo,
+          period, frequency: form.periodType, eventName: null, form, data: {}, fieldsSnapshot: [],
+          recordedDate: todayISODate(), submittedAt: now, regNo,
         });
       }
       return o;
     });
-    this.submitState = { done: true }; this.editingReportId = null; this.render();
-    setTimeout(() => { this.submitState.done = false; this.render(); }, 2500);
+    if (editId) {
+      this.editingReportId = null; RD = null; this.submitState = { done: false };
+      this.view = "submissions"; this.render();
+    } else {
+      RD = newReportDraft(form.type, user);
+      this.submitState = { done: true }; this.render();
+      setTimeout(() => { this.submitState.done = false; this.render(); }, 3500);
+    }
+    window.scrollTo(0, 0);
   },
 
   viewReport(id) { this.viewingReportId = id; this.render(); },
@@ -1044,15 +976,15 @@ const App = {
   editReport(id) {
     const r = this.org.reports.find((x) => x.id === id);
     if (!r) return;
+    if (r.version !== 2 || !r.form) { alert("This report was submitted in the older template format and can't be edited in the new form."); return; }
     this.editingReportId = id; this.submitType = r.type;
     this.submitState = { done: false };
-    submitFormValues = { ...r.data };
-    const template = this.templateForSubmit(r.type);
-    const templateIds = new Set((template ? template.fields : []).map((f) => f.id));
-    submitCustomFields = (r.fieldsSnapshot || []).filter((f) => !templateIds.has(f.id)).map((f) => ({ ...f }));
+    RD = JSON.parse(JSON.stringify(r.form));
+    RD.type = r.type;
+    if (r.type === "financial") RD.openingBalance = this.getOpeningBalanceFor(this.currentUser(), r);
     this.view = "submit"; this.render();
   },
-  cancelEditReport() { this.editingReportId = null; submitFormValues = {}; submitCustomFields = []; this.render(); },
+  cancelEditReport() { this.editingReportId = null; RD = null; this.view = "submissions"; this.render(); },
 
   async updateProfile(patch) {
     const user = this.currentUser();
@@ -1203,7 +1135,7 @@ function renderLanding() {
           ${badge("gold", "Reg. No. keeps every submission accountable", "scroll")}
           <h1 class="cra-display text-4xl" style="line-height:1.08;margin-top:1.25rem">One register for every parish, local &amp; report.</h1>
           <p class="text-base mt-5" style="color:var(--ink-soft);max-width:28rem">
-            Secretaries, financial secretaries and treasurers fill in the report your parish has laid out.
+            Secretaries, financial secretaries and treasurers fill in the standard youth council report: theme, areas of report, events, meetings, accounts and sign-offs.
             The president reviews and downloads a finished PDF — nothing gets rewritten after it's signed.
           </p>
           <div class="row wrap gap-3 mt-8">
@@ -1215,7 +1147,7 @@ function renderLanding() {
           <div class="cra-label mb-4" style="color:var(--violet)">How the hierarchy works</div>
           <ol class="space-y-4 text-sm" style="list-style:none;margin:0;padding:0">
             ${[
-              ["An IT admin sets up the parish", "one account, once — registers the parish, then manages members and templates."],
+              ["An IT admin sets up the parish", "one account, once — registers the parish, then manages members and the executives roster."],
               ["A president registers each local", "under the parish before that local's officers can join."],
               ["Local &amp; parish executives register", "choosing their position — secretary, financial secretary, treasurer, and so on."],
               ["Secretaries &amp; treasurers fill in reports", "weekly, monthly, annually, or for the current programme — with the date you record."],
@@ -1524,6 +1456,7 @@ function downloadText(filename, text) {
   URL.revokeObjectURL(url);
 }
 function buildReportText(report, ctx) {
+  if (report.version === 2) return buildReportTextV2(report, ctx);
   const lines = [];
   lines.push("=".repeat(46)); lines.push(ctx.parishName.toUpperCase());
   if (ctx.localName) lines.push(ctx.localName);
@@ -1599,6 +1532,7 @@ function rosterForReportScope(report) {
 function simplifyRoleText(s) { return String(s || "").toLowerCase().replace(/[’‘]/g, "'").replace(/[.\s]/g, ""); }
 
 function buildFilledReportHtml(report, ctx) {
+  if (report.version === 2) return buildReportV2Html(report, ctx);
   const isBlank = !!report.isBlankTemplate;
   const submitter = App.org.users.find((u) => u.id === report.submittedBy);
   const executives = isBlank ? [] : executivesForReport(report);
@@ -1706,6 +1640,146 @@ function buildFilledReportHtml(report, ctx) {
   </div>`;
 }
 
+/* ---- Rendering a submitted structured report (viewer modal + PDF share this) ---- */
+function reportV2BodyHtml(report) {
+  const f = report.form || {};
+  const fmtD = (iso) => iso ? displayShort(iso) : "—";
+  const val = (v) => { const s = String(v == null ? "" : v).trim(); return s ? esc(s) : "—"; };
+  const sec = (title, inner) => `<div style="margin:0 0 16px 0"><div style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;background:#232a52;color:#fff;padding:6px 10px;margin-bottom:8px">${esc(title)}</div>${inner}</div>`;
+  const kv = (label, v) => `<div style="margin:0 0 8px 0"><div style="font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#57536b">${esc(label)}</div><div style="font-size:12.5px;line-height:1.5;white-space:pre-wrap">${val(v)}</div></div>`;
+  const th = (c, right) => `<th style="text-align:${right ? "right" : "left"};padding:5px 7px;font-size:10px;text-transform:uppercase;letter-spacing:0.03em;background:#eceaf3;border:1px solid #c7c1da;color:#211f2e">${esc(c)}</th>`;
+  const td = (c, right, bold) => `<td style="text-align:${right ? "right" : "left"};padding:5px 7px;font-size:11.5px;border:1px solid #d9d4c4;vertical-align:top;${bold ? "font-weight:700;background:#f5f3ea;" : ""}">${c}</td>`;
+  const table = (heads, rows, rightIdx, foot) => `<table style="width:100%;border-collapse:collapse;margin:0 0 8px 0"><thead><tr>${heads.map((h, i) => th(h, rightIdx.includes(i))).join("")}</tr></thead><tbody>${rows.length ? rows.map((r) => `<tr>${r.map((c, i) => td(c, rightIdx.includes(i))).join("")}</tr>`).join("") : `<tr><td colspan="${heads.length}" style="padding:6px 7px;font-size:11px;color:#8a8698;border:1px solid #d9d4c4">None recorded</td></tr>`}${foot || ""}</tbody></table>`;
+  const footRow = (label, amount, span) => `<tr>${`<td colspan="${span}" style="text-align:right;padding:5px 7px;font-size:11.5px;border:1px solid #d9d4c4;font-weight:700;background:#f5f3ea">${esc(label)}</td>`}${td("GHS " + fmtMoney(amount), true, true)}</tr>`;
+  const foot3 = (label, amount) => `<tr>${td(esc(label), false, true)}${td("GHS " + fmtMoney(amount), true, true)}${td("", false, true)}</tr>`;
+  const money = (v) => "GHS " + fmtMoney(num0(v));
+
+  let h = "";
+  h += sec("Theme of the year", kv("Theme", f.theme));
+  h += sec("Period of report", `<div style="display:flex;gap:28px;flex-wrap:wrap">${kv("Period", f.periodType)}${kv("From", fmtD(f.periodFrom))}${kv("To", fmtD(f.periodTo))}</div>`);
+  h += sec("Membership", kv("Reporting as", f.membership));
+  h += sec("Secretariat", `${kv("Email", f.email)}${table(["Name", "Position", "Phone number"], (f.executives || []).map((e) => [val(e.name), val(e.position), val(e.phone)]), [])}`);
+
+  if (report.type !== "financial") {
+    const areas = REPORT_AREAS.filter((a) => f.areas && f.areas[a.key]);
+    h += sec("Areas of report", `<div style="font-size:12.5px;line-height:1.7">${areas.map((a) => `<div><b style="color:#a3812f">${a.numeral}.</b> ${esc(a.key === "other" ? (f.otherAreaName ? `Other — ${f.otherAreaName}` : "Other") : a.label)}</div>`).join("") || "—"}</div>`);
+    const eventAreas = areas.filter((a) => a.hasEvents);
+    if (eventAreas.length) {
+      h += sec("Event details", eventAreas.map((a) => {
+        const evs = (f.events && f.events[a.key]) || [];
+        const title = `${a.numeral}. ${a.key === "other" ? (f.otherAreaName || "Other") : a.label}`;
+        return `<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700;color:#732a30;margin:4px 0 6px 0;font-family:'Fraunces',Georgia,serif">${esc(title)}</div>${evs.length ? evs.map((ev, i) => `<div style="border:1px solid #d9d4c4;border-left:3px solid #a3812f;padding:8px 10px;margin-bottom:8px;page-break-inside:avoid">
+          <div style="font-size:10px;font-weight:700;color:#a3812f;text-transform:uppercase;margin-bottom:4px">Event ${i + 1}</div>
+          ${kv("Name of event / focus", ev.name)}
+          <div style="display:flex;gap:24px;flex-wrap:wrap">${kv("Number of participants", ev.participants)}${kv("Resource persons", ev.resource)}${kv("Structure of programme / level", ev.level)}</div>
+          ${kv("Outcome / impact", ev.outcome)}${kv("Challenges", ev.challenges)}${kv("Way forward / future plans", ev.wayForward)}${kv("Major activities for the ensuing year", ev.ensuingActivities)}${kv("Special projects", ev.specialProjects)}${kv("Collaborations / affiliated partnership programmes", ev.collaborations)}${kv("Recommendations", ev.recommendations)}
+        </div>`).join("") : `<div style="font-size:11px;color:#8a8698">No events recorded.</div>`}</div>`;
+      }).join(""));
+    }
+    if (f.areas && f.areas.meeting) {
+      const ms = f.meetings || [];
+      h += sec("Meetings", ms.length ? ms.map((m, i) => `<div style="border:1px solid #d9d4c4;border-left:3px solid #732a30;padding:8px 10px;margin-bottom:8px;page-break-inside:avoid">
+        <div style="font-size:10px;font-weight:700;color:#732a30;text-transform:uppercase;margin-bottom:4px">Meeting ${i + 1}</div>
+        ${kv("Meeting title", m.title)}
+        <div style="display:flex;gap:24px;flex-wrap:wrap">${kv("Date", fmtD(m.date))}${kv("Venue", m.venue)}</div>
+        ${kv("Key outcomes / decisions", m.outcomes)}${kv("Challenges / problems", m.challenges)}${kv("Projections / future plans", m.projections)}${kv("Others", m.others)}
+      </div>`).join("") : `<div style="font-size:11px;color:#8a8698">No meetings recorded.</div>`);
+    }
+    if (f.areas && f.areas.action) h += sec("Action plan", table(["Activity area", "Planned activity", "Timeline"], (f.actionPlan || []).map((a) => [val(a.area), val(a.activity), val(a.timeline)]), []));
+  } else {
+    const inc = f.income || [], exp = f.expenditure || [];
+    h += sec("Accounts", `
+      <div style="font-size:11px;font-weight:700;margin:0 0 4px 0">Income</div>
+      ${table(["Source", "Amount", "Date"], inc.map((r) => [val(r.source), money(r.amount), fmtD(r.date)]), [1], foot3("Total income", f.totalIncome))}
+      <div style="font-size:11px;font-weight:700;margin:10px 0 4px 0">Expenditure</div>
+      ${table(["Item / description", "Amount", "Date"], exp.map((r) => [val(r.item), money(r.amount), fmtD(r.date)]), [1], foot3("Total expenditure", f.totalExpenditure))}
+      <div style="font-size:11px;font-weight:700;margin:10px 0 4px 0">Balance</div>
+      <table style="width:100%;border-collapse:collapse"><tbody>
+        <tr>${td("Opening balance")}${td(money(f.openingBalance), true)}</tr>
+        <tr>${td("Total income")}${td(money(f.totalIncome), true)}</tr>
+        <tr>${td("Total expenditure")}${td(money(f.totalExpenditure), true)}</tr>
+        <tr>${td("Balance", false, true)}${td(money(f.closingBalance), true, true)}</tr>
+      </tbody></table>`);
+    if (f.periodType === "Final Report") {
+      h += sec("Budget (Final Report)", table(["Item", "Unit cost", "Quantity", "Total cost"], (f.budget || []).map((b) => [val(b.item), money(b.unitCost), val(b.qty), money(num0(b.unitCost) * num0(b.qty))]), [1, 2, 3], footRow("Total budget", f.budgetTotal, 3)));
+    }
+  }
+
+  const so = f.signoff || {};
+  const signBox = (label, s) => {
+    s = s || {};
+    const match = App.org.users.find((u) => u.name.trim().toLowerCase() === String(s.name || "").trim().toLowerCase());
+    const sig = match && match.signatureDataUrl;
+    return `<div style="flex:1 1 180px;min-width:170px"><div style="font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#57536b;margin-bottom:6px">${esc(label)}</div>
+      <div style="height:42px;display:flex;align-items:flex-end">${sig ? `<img src="${sig}" style="max-height:40px;max-width:150px" />` : ""}</div>
+      <div style="border-top:1px solid #211f2e;padding-top:3px;font-size:12px;font-weight:600">${val(s.name)}</div>
+      <div style="font-size:11px;color:#57536b">${val(s.position)}</div>
+      <div style="font-size:10.5px;color:#57536b">Date: ${s.date ? fmtD(s.date) : "……………"}</div></div>`;
+  };
+  h += sec("Sign-off", `<div style="display:flex;flex-wrap:wrap;gap:20px;page-break-inside:avoid">${SIGNOFFS.map((s) => signBox(s.label, so[s.key])).join("")}</div>`);
+  return h;
+}
+
+function buildReportV2Html(report, ctx) {
+  const header = `
+    ${ctx.parish && ctx.parish.logoDataUrl ? `<div style="text-align:center;margin-bottom:8px"><img src="${ctx.parish.logoDataUrl}" style="height:56px" /></div>` : ""}
+    <div style="font-family:'Fraunces',Georgia,serif;text-align:center;margin-bottom:16px">
+      <div style="font-size:19px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${esc(ctx.parishName)}</div>
+      ${ctx.localName ? `<div style="font-size:14px;color:#57536b">${esc(ctx.localName)}</div>` : ""}
+      <div style="font-size:12px;color:#57536b;margin-top:8px">${esc(reportTypeLabel(report.type))} &middot; Reg. No ${esc(report.regNo)}</div>
+    </div>
+    <table style="width:100%;font-size:12px;margin-bottom:16px;border-collapse:collapse">
+      <tr><td style="padding:2px 0;color:#57536b">Reporting period</td><td style="padding:2px 0;font-weight:600">${esc(report.period || "—")}</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Submitted by</td><td style="padding:2px 0;font-weight:600">${esc(report.submitterName)} (${esc(report.position)})</td></tr>
+      <tr><td style="padding:2px 0;color:#57536b">Date recorded</td><td style="padding:2px 0;font-weight:600">${new Date(report.submittedAt).toLocaleString()}</td></tr>
+    </table>`;
+  return `<div style="position:relative;font-family:'Inter',ui-sans-serif,sans-serif;color:#211f2e;background-color:#ffffff;padding:28px;max-width:720px">
+    <div style="position:absolute;inset:0;text-align:center;overflow:hidden;pointer-events:none;z-index:0"><img src="${GODYC_WATERMARK_DATA_URL}" style="width:360px;max-width:68%;height:auto;margin-top:18%" /></div>
+    <div style="position:relative;z-index:1">${header}${reportV2BodyHtml(report)}<div style="margin-top:20px;font-size:10px;color:#8a8698;text-align:center">Reviewed &amp; downloaded via the parish register. Read-only record.</div></div>
+  </div>`;
+}
+
+function buildReportTextV2(report, ctx) {
+  const f = report.form || {}; const L = [];
+  const v = (x) => String(x == null ? "" : x).trim() || "—";
+  const line = (l, x) => L.push(`${l}: ${v(x)}`);
+  const d = (iso) => iso ? displayShort(iso) : "—";
+  L.push("=".repeat(46)); L.push(ctx.parishName.toUpperCase()); if (ctx.localName) L.push(ctx.localName); L.push("=".repeat(46));
+  line("Register No", report.regNo); line("Report type", reportTypeLabel(report.type));
+  line("Submitted by", `${report.submitterName} (${report.position})`); line("Submitted on", new Date(report.submittedAt).toLocaleString());
+  L.push("-".repeat(46));
+  line("Theme of the year", f.theme); line("Period", `${f.periodType || "—"} (${d(f.periodFrom)} to ${d(f.periodTo)})`);
+  line("Membership", f.membership); line("Secretariat email", f.email);
+  L.push("Executives:"); (f.executives || []).forEach((e) => L.push(`  - ${v(e.name)} | ${v(e.position)} | ${v(e.phone)}`));
+  L.push("");
+  if (report.type !== "financial") {
+    REPORT_AREAS.filter((a) => a.hasEvents && f.areas && f.areas[a.key]).forEach((a) => {
+      L.push(`${a.numeral}. ${a.key === "other" ? (f.otherAreaName || "Other") : a.label}`);
+      ((f.events && f.events[a.key]) || []).forEach((ev, i) => {
+        L.push(`  Event ${i + 1}`); line("   Name / focus", ev.name); line("   Participants", ev.participants); line("   Resource persons", ev.resource); line("   Level", ev.level);
+        line("   Outcome / impact", ev.outcome); line("   Challenges", ev.challenges); line("   Way forward", ev.wayForward); line("   Major activities for the ensuing year", ev.ensuingActivities);
+        line("   Special projects", ev.specialProjects); line("   Collaborations", ev.collaborations); line("   Recommendations", ev.recommendations);
+      });
+      L.push("");
+    });
+    if (f.areas && f.areas.meeting) {
+      L.push("MEETINGS");
+      (f.meetings || []).forEach((m, i) => { L.push(`  Meeting ${i + 1}`); line("   Title", m.title); line("   Date", d(m.date)); line("   Venue", m.venue); line("   Key outcomes / decisions", m.outcomes); line("   Challenges / problems", m.challenges); line("   Projections / future plans", m.projections); line("   Others", m.others); });
+      L.push("");
+    }
+    if (f.areas && f.areas.action) { L.push("ACTION PLAN"); (f.actionPlan || []).forEach((a) => L.push(`  - ${v(a.area)} | ${v(a.activity)} | ${v(a.timeline)}`)); L.push(""); }
+  } else {
+    L.push("INCOME"); (f.income || []).forEach((r) => L.push(`  - ${v(r.source)} | GHS ${fmtMoney(num0(r.amount))} | ${d(r.date)}`)); line("  Total income", "GHS " + fmtMoney(f.totalIncome));
+    L.push("EXPENDITURE"); (f.expenditure || []).forEach((r) => L.push(`  - ${v(r.item)} | GHS ${fmtMoney(num0(r.amount))} | ${d(r.date)}`)); line("  Total expenditure", "GHS " + fmtMoney(f.totalExpenditure));
+    line("Opening balance", "GHS " + fmtMoney(num0(f.openingBalance))); line("Balance", "GHS " + fmtMoney(f.closingBalance));
+    if (f.periodType === "Final Report") { L.push(""); L.push("BUDGET (FINAL REPORT)"); (f.budget || []).forEach((b) => L.push(`  - ${v(b.item)} | unit GHS ${fmtMoney(num0(b.unitCost))} x ${v(b.qty)} = GHS ${fmtMoney(num0(b.unitCost) * num0(b.qty))}`)); line("  Total budget", "GHS " + fmtMoney(f.budgetTotal)); }
+    L.push("");
+  }
+  SIGNOFFS.forEach((s) => { const x = (f.signoff || {})[s.key] || {}; L.push(`${s.label}: ${v(x.name)} (${v(x.position)}) — ${d(x.date)}`); });
+  L.push("-".repeat(46)); L.push("Reviewed & downloaded via the parish register. Read-only record.");
+  return L.join("\n");
+}
+
 // html2canvas measures the container's height before every image inside it has
 // necessarily finished decoding. If the watermark (or a parish logo) isn't ready yet,
 // that height can shift mid-capture and jsPDF ends up tacking on a stray blank page.
@@ -1740,39 +1814,6 @@ async function downloadReportPdf(reportId) {
     await waitForImagesToLoad(container);
     await html2pdf().set({ margin: 10, filename: `report-${report.regNo}.pdf`, html2canvas: PDF_HTML2CANVAS_OPTS, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }, pagebreak: PDF_PAGEBREAK_OPTS }).from(container).save();
   } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser. Try the .txt download instead."); }
-  finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
-}
-
-// A synthetic "report" built straight from a template, with no answers filled in —
-// used to produce a printable blank form (question structure + empty fields) for
-// cases where the secretary/treasurer hasn't submitted a digital report yet.
-function buildBlankReportObject(type) {
-  const user = App.currentUser();
-  const { level, id } = App.scopeFor(user);
-  const template = App.org.templates.find((t) => t.ownerLevel === level && t.ownerId === id && t.type === type);
-  if (!template) return null;
-  return {
-    id: "blank", type, ownerLevel: level, ownerId: id,
-    submittedBy: null, submitterName: "—", position: reportTypeLabel(type),
-    period: null, frequency: null, eventName: null, heading: App.getHeadingForScope(user),
-    data: {}, fieldsSnapshot: template.fields,
-    docHtmlSnapshot: template.docHtml, docFileNameSnapshot: template.docFileName,
-    submittedAt: Date.now(), regNo: "BLANK", isBlankTemplate: true,
-  };
-}
-
-async function downloadBlankTemplatePdf(type) {
-  const report = buildBlankReportObject(type);
-  if (!report) { alert("No template has been set up for this report type yet."); return; }
-  const ctx = ctxForReport(report);
-  App.pdfBuilding = "blank:" + type; App.render();
-  const container = makePdfContainer();
-  container.innerHTML = buildFilledReportHtml(report, ctx);
-  document.body.appendChild(container);
-  try {
-    await waitForImagesToLoad(container);
-    await html2pdf().set({ margin: 10, filename: `blank-${type}-template.pdf`, html2canvas: PDF_HTML2CANVAS_OPTS, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }, pagebreak: PDF_PAGEBREAK_OPTS }).from(container).save();
-  } catch (err) { console.error(err); alert("Couldn't build the PDF in this browser."); }
   finally { document.body.removeChild(container); App.pdfBuilding = false; App.render(); }
 }
 
@@ -1821,10 +1862,10 @@ function reportViewModalHtml(report) {
           ${submitter && submitter.signatureDataUrl ? `<img class="sig-thumb mt-2" src="${submitter.signatureDataUrl}" />` : ""}
         </div>
         <div class="space-y-3">
-          ${(report.fieldsSnapshot || []).map((f) => `<div class="cra-ledger-row" style="padding-bottom:0.75rem"><div class="cra-label mb-1">${esc(f.label)}</div><div class="text-sm whitespace-pre-wrap">${esc(String(report.data[f.id] ?? "").trim() || "—")}</div></div>`).join("")}
+          ${report.version === 2 ? `<div style="background:#fff;padding:14px;border:1px solid var(--line);border-radius:8px">${reportV2BodyHtml(report)}</div>` : (report.fieldsSnapshot || []).map((f) => `<div class="cra-ledger-row" style="padding-bottom:0.75rem"><div class="cra-label mb-1">${esc(f.label)}</div><div class="text-sm whitespace-pre-wrap">${esc(String(report.data[f.id] ?? "").trim() || "—")}</div></div>`).join("")}
         </div>
         <div class="row wrap justify-end gap-2 mt-5">
-          ${report.submittedBy === App.currentUser().id ? btnHtml({ variant: "ghost", label: "Edit answers", attrs: `onclick="App.closeReportView(); App.editReport('${report.id}')"` }) : ""}
+          ${report.submittedBy === App.currentUser().id && report.version === 2 ? btnHtml({ variant: "ghost", label: "Edit answers", attrs: `onclick="App.closeReportView(); App.editReport('${report.id}')"` }) : ""}
           ${btnHtml({ variant: "ghost", label: "Download .txt", iconName: "download", attrs: `onclick="downloadReport('${report.id}')"` })}
           ${btnHtml({ variant: "primary", label: App.pdfBuilding === report.id ? "Building PDF…" : "Download filled PDF", iconName: "download", attrs: `onclick="downloadReportPdf('${report.id}')" ${App.pdfBuilding === report.id ? "disabled" : ""}` })}
         </div>
@@ -1837,358 +1878,303 @@ function reportViewModalHtml(report) {
 /*  Template builder                                                     */
 /* ==================================================================== */
 
-// Read-only counterpart to the fillable document body built in submitReportFormHtml —
-// same tables/headings from the uploaded .docx, but every matched question renders as
-// a static, non-interactive placeholder (no inputs) since presidents/admins here are
-// laying the template out, not filling it in.
-function templatePreviewDocBody(fields, docHtml) {
-  const wrapper = document.createElement("div");
-  wrapper.innerHTML = docHtml;
-  const matchedIds = new Set();
+/* ==================================================================== */
+/*  Structured report form (Secretariat report + Financial report)       */
+/* ==================================================================== */
 
-  Array.from(wrapper.querySelectorAll("table")).forEach((table) => {
-    const rows = Array.from(table.querySelectorAll("tr"));
-    if (!rows.length) return;
-    const headerCells = Array.from(rows[0].children).map((c) => (c.textContent || "").trim().toLowerCase());
-    const nameIdx = headerCells.findIndex((h) => /name/.test(h));
-    const posIdx = headerCells.findIndex((h) => /position/.test(h));
-    const phoneIdx = headerCells.findIndex((h) => /phone|tel|contact/.test(h));
-    if (nameIdx === -1 || posIdx === -1) return;
-    rows.slice(1).forEach((tr) => {
-      const cells = Array.from(tr.children);
-      const posText = (cells[posIdx] && cells[posIdx].textContent || "").trim();
-      const roleKey = ROSTER_ROLES_DISPLAY.find((r) => simplifyRoleText(r) === simplifyRoleText(posText));
-      if (!roleKey) return;
-      const nameField = fields.find((f) => f.label === `${roleKey} — Name`);
-      const phoneField = fields.find((f) => f.label === `${roleKey} — Phone`);
-      if (cells[nameIdx] && nameField) { cells[nameIdx].innerHTML = `<span style="color:#a39ab0;font-style:italic;font-size:10.5px">Auto-fills from roster</span>`; matchedIds.add(nameField.id); }
-      if (phoneIdx !== -1 && cells[phoneIdx] && phoneField) { cells[phoneIdx].innerHTML = `<span style="color:#a39ab0;font-style:italic;font-size:10.5px">Auto-fills from roster</span>`; matchedIds.add(phoneField.id); }
-    });
-  });
+const REPORT_AREAS = [
+  { key: "faith", numeral: "i", label: "Faith Information Activities", hasEvents: true },
+  { key: "growth", numeral: "ii", label: "Growth & Maturation Activities", hasEvents: true },
+  { key: "skills", numeral: "iii", label: "Skills Development Activities", hasEvents: true },
+  { key: "wyd", numeral: "iv", label: "World Youth Day Celebration", hasEvents: true },
+  { key: "meeting", numeral: "v", label: "Meeting", hasEvents: false },
+  { key: "action", numeral: "vi", label: "Action Plan", hasEvents: false },
+  { key: "other", numeral: "vii", label: "Other", hasEvents: true },
+];
+const ACTION_AREA_LABELS = ["Faith Information Activities", "Growth & Maturation Activities", "Skills Development Activities", "World Youth Day Celebration", "Meeting"];
+const PERIOD_TYPES = ["Weekly", "Monthly", "Quarterly", "Annual", "Final Report", "Current programme"];
+const MEMBERSHIP_OPTIONS = ["Parish", "Deanery"];
+const EVENT_LEVELS = ["Parish", "Deanery", "Diocesan"];
+const SIGNOFFS = [{ key: "prepared", label: "Prepared by" }, { key: "endorsed", label: "Endorsed by" }, { key: "vetted", label: "Vetted by" }];
 
-  const blocks = Array.from(wrapper.children).length ? Array.from(wrapper.children) : [wrapper];
-  blocks.forEach((el) => {
-    const text = (el.textContent || "").trim();
-    if (isPartMarker(text)) { el.classList.add("docx-banner"); return; }
-    const lower = text.toLowerCase();
-    const f = fields.find((fld) => !matchedIds.has(fld.id) && text && lower.indexOf(fld.label.toLowerCase()) !== -1);
-    if (f) {
-      matchedIds.add(f.id);
-      el.insertAdjacentHTML("afterend", `<span class="docx-slot-readonly" style="color:#a3812f;font-style:italic">${esc(f.label)}</span>`);
-    }
-  });
-  return { html: wrapper.innerHTML, matchedIds };
+let RD = null; // the report currently being filled in
+const num0 = (v) => parseFloat(v) || 0;
+function autoLevelFor(membership) { return membership === "Deanery" ? "Deanery" : "Parish"; }
+function nonEmptyRow(o) { return Object.values(o).some((v) => String(v == null ? "" : v).trim() !== ""); }
+function displayShort(iso) { if (!iso) return ""; const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); }
+function periodLabel(f) {
+  const range = (f.periodFrom || f.periodTo) ? `${f.periodFrom ? displayShort(f.periodFrom) : "…"} – ${f.periodTo ? displayShort(f.periodTo) : "…"}` : "";
+  return [f.periodType, range].filter(Boolean).join(" · ");
+}
+function closingBalanceOf(report) {
+  if (report.version === 2 && report.form && report.form.closingBalance !== undefined) return Number(report.form.closingBalance);
+  const cf = (report.fieldsSnapshot || []).find((f) => /closing balance/i.test(f.label));
+  if (cf && report.data && report.data[cf.id] !== undefined && report.data[cf.id] !== "") { const v = parseFloat(report.data[cf.id]); if (!isNaN(v)) return v; }
+  return null;
 }
 
-function templateEditorHtml(type) {
-  if (App.templateDraft[type] === null) App.openTemplateEditor(type);
-  const fields = App.templateDraft[type];
-  const draft = App.templateDraftInput[type];
-  const saved = App.templateSavedFlash === type;
-  const doc = App.templateDraftDoc[type];
-  const flash = App.templateUploadFlash && App.templateUploadFlash.type === type ? App.templateUploadFlash : null;
-  const preview = doc && doc.html ? templatePreviewDocBody(fields, doc.html) : null;
-  const leftoverFields = preview ? fields.filter((f) => !preview.matchedIds.has(f.id)) : fields;
-  return `<div class="cra-card cra-card-accent p-5">
-    <div class="row items-center justify-between mb-2">
-      <div class="row items-center gap-2">${icon(REPORT_TYPE_ICON[type], 16, "")}<h3 class="cra-display text-lg">${reportTypeLabel(type)} template</h3></div>
-      ${fields.length > 0 ? badge("green", `${fields.length} field${fields.length !== 1 ? "s" : ""}`, "check") : ""}
-    </div>
-    <div class="mb-4">${badge(type === "financial" ? "gold" : "violet", `Filled by: ${templateAudienceLabel(type)}`)}</div>
-    <div class="p-3 mb-4" style="background:#f5f3ea;border-radius:8px;border:1px dashed var(--gold)">
-      <div class="cra-label mb-2" style="color:var(--violet)">Upload a Word (.docx) template</div>
-      <p class="text-xs mb-3" style="color:var(--ink-soft)">Optional — upload the exact form your team already uses. Section headings and table headers are skipped automatically, and ${type === "financial" ? "only Part B (Financial Secretary/Treasurer)" : "only Part A (Secretary)"} questions are pulled in; the layout is reused when building the filled-in PDF and the live fill-in document.</p>
-      <div class="row wrap items-center gap-2">
-        <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("upload", 14)} ${doc ? "Replace file" : "Choose .docx file"}
-          <input type="file" accept=".docx" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.handleDocxUpload('${type}', this.files[0])" /></label>
-        ${doc ? `<span class="text-xs row items-center gap-1" style="color:var(--ink-soft)">${icon("file", 13)} ${esc(doc.fileName)}</span><button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.clearDocxUpload('${type}')">${icon("x", 12)} Remove</button>` : ""}
+function blankEvent() { return { name: "", participants: "", resource: "", level: "", outcome: "", challenges: "", wayForward: "", ensuingActivities: "", specialProjects: "", collaborations: "", recommendations: "" }; }
+function blankMeeting() { return { title: "", date: "", venue: "", outcomes: "", challenges: "", projections: "", others: "" }; }
+const ROW_FACTORIES = {
+  executives: () => ({ name: "", position: "", phone: "" }),
+  income: () => ({ source: "", amount: "", date: "" }),
+  expenditure: () => ({ item: "", amount: "", date: "" }),
+  budget: () => ({ item: "", unitCost: "", qty: "" }),
+  meetings: blankMeeting,
+  actionPlan: () => ({ area: "", activity: "", timeline: "" }),
+  event: blankEvent,
+};
+
+function newReportDraft(type, user) {
+  const { level, id } = App.scopeFor(user);
+  const roster = App.getRosterForScope(user);
+  const executives = ROSTER_ROLES_DISPLAY.filter((r) => roster[r] && (roster[r].name || roster[r].phone)).map((r) => ({ name: roster[r].name || "", position: r, phone: roster[r].phone || "" }));
+  if (!executives.length) executives.push(ROW_FACTORIES.executives());
+  const prevs = App.org.reports.filter((r) => r.version === 2 && r.form && r.ownerLevel === level && r.ownerId === id).sort((a, b) => (a.submittedAt || 0) - (b.submittedAt || 0));
+  const prev = prevs[prevs.length - 1];
+  const emptySign = () => ({ name: "", position: "", date: "" });
+  return {
+    type, theme: prev ? (prev.form.theme || "") : "",
+    periodType: "", periodFrom: "", periodTo: "",
+    membership: prev ? (prev.form.membership || "") : "",
+    email: user.email || "", executives,
+    areas: { faith: false, growth: false, skills: false, wyd: false, meeting: false, action: false, other: false },
+    otherAreaName: "",
+    events: { faith: [], growth: [], skills: [], wyd: [], other: [] },
+    meetings: [], actionPlan: [],
+    income: [ROW_FACTORIES.income()], expenditure: [ROW_FACTORIES.expenditure()], budget: [ROW_FACTORIES.budget()],
+    openingBalance: type === "financial" ? App.getOpeningBalanceFor(user, null) : 0,
+    signoff: { prepared: { name: user.name, position: user.position, date: todayISODate() }, endorsed: emptySign(), vetted: emptySign() },
+  };
+}
+
+function rdGet(path) { return path.split(".").reduce((o, k) => (o == null ? o : o[k]), RD); }
+function rdSet(path, val) { const ks = path.split("."); let o = RD; for (let i = 0; i < ks.length - 1; i++) o = o[ks[i]]; o[ks[ks.length - 1]] = val; }
+function rdRender() { const y = window.scrollY; App.render(); window.scrollTo(0, y); }
+function rdAddRow(listPath) { const key = listPath.indexOf("events.") === 0 ? "event" : listPath; rdGet(listPath).push(ROW_FACTORIES[key]()); rdRender(); }
+function rdRemoveRow(listPath, i) { rdGet(listPath).splice(i, 1); rdRender(); }
+function rdToggleArea(key, checked) {
+  RD.areas[key] = checked;
+  if (checked) {
+    if (key === "meeting") { if (!RD.meetings.length) RD.meetings.push(blankMeeting()); }
+    else if (key === "action") { if (!RD.actionPlan.length) RD.actionPlan.push(ROW_FACTORIES.actionPlan()); }
+    else if (RD.events[key] && !RD.events[key].length) RD.events[key].push(blankEvent());
+  }
+  rdRender();
+}
+function rdSetSignoffName(key, val) {
+  const so = RD.signoff[key]; so.name = val;
+  const match = App.org.users.find((u) => u.name.trim().toLowerCase() === val.trim().toLowerCase());
+  if (match && !so.position.trim()) { so.position = match.isAdmin ? "IT Admin" : match.position; rdRender(); }
+}
+function rdTotals(d) {
+  const income = (d.income || []).reduce((s, r) => s + num0(r.amount), 0);
+  const exp = (d.expenditure || []).reduce((s, r) => s + num0(r.amount), 0);
+  const budget = (d.budget || []).reduce((s, r) => s + num0(r.unitCost) * num0(r.qty), 0);
+  return { income, exp, closing: num0(d.openingBalance) + income - exp, budget };
+}
+function rdRecalc() {
+  const t = rdTotals(RD);
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = "GHS " + fmtMoney(v); };
+  set("rd-total-income", t.income); set("rd-total-exp", t.exp); set("rd-bal-income", t.income); set("rd-bal-exp", t.exp); set("rd-closing", t.closing); set("rd-b-grand", t.budget);
+  (RD.budget || []).forEach((b, i) => set("rd-b-total-" + i, num0(b.unitCost) * num0(b.qty)));
+}
+
+/* --- small field renderers (values live in RD, inputs update it as you type) --- */
+function rdText(path, label, o = {}) {
+  const attrs = o.type === "number" ? ` step="any" min="0" inputmode="decimal"` : "";
+  return fieldWrap(label, `<input class="cra-input" type="${o.type || "text"}"${attrs} value="${esc(rdGet(path))}" placeholder="${esc(o.placeholder || "")}" oninput="rdSet('${path}', this.value)" />`, o.help);
+}
+function rdArea(path, label, o = {}) {
+  return fieldWrap(label, `<textarea class="cra-textarea" rows="${o.rows || 3}" placeholder="${esc(o.placeholder || "")}" oninput="rdSet('${path}', this.value)">${esc(rdGet(path))}</textarea>`, o.help);
+}
+function rdSelect(path, label, options, o = {}) {
+  const v = rdGet(path) || "";
+  return fieldWrap(label, `<select class="cra-select" onchange="rdSet('${path}', this.value);${o.rerender ? "rdRender();" : ""}">${o.placeholder ? `<option value="">${esc(o.placeholder)}</option>` : ""}${options.map((x) => `<option value="${esc(x)}" ${v === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`, o.help);
+}
+function rdCell(path, placeholder, o = {}) {
+  const t = o.type || "text";
+  const attrs = t === "number" ? ` step="any" min="0" inputmode="decimal"` : "";
+  return `<div class="rd-cell"><input class="cra-input" type="${t}"${attrs} value="${esc(rdGet(path))}" placeholder="${esc(placeholder)}" oninput="rdSet('${path}', this.value);${o.recalc ? "rdRecalc();" : ""}" /></div>`;
+}
+function rdDelBtn(list, i) { return `<button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" title="Remove" onclick="rdRemoveRow('${list}',${i})">${icon("trash", 13)}</button>`; }
+function rdAddBtn(list, label) { return `<button type="button" class="cra-btn cra-btn-ghost cra-btn-sm mt-2" onclick="rdAddRow('${list}')">${icon("plus", 12)} ${esc(label)}</button>`; }
+function rdHead(cols) { return `<div class="rd-row rd-head">${cols.map((c) => `<div class="rd-cell cra-label" style="margin:0">${esc(c)}</div>`).join("")}<div style="width:34px"></div></div>`; }
+function rdSection(n, title, inner, note) {
+  return `<div class="cra-card p-5 mb-4"><div class="row items-center gap-2 mb-1"><span class="cra-mono font-semibold" style="color:var(--gold)">${String(n).padStart(2, "0")}</span><h3 class="cra-display text-lg">${esc(title)}</h3></div>${note ? `<p class="text-xs mb-3" style="color:var(--ink-soft)">${esc(note)}</p>` : `<div class="mb-3"></div>`}${inner}</div>`;
+}
+
+function rdEventCard(areaKey, i) {
+  const p = `events.${areaKey}.${i}`;
+  const ev = RD.events[areaKey][i];
+  const auto = autoLevelFor(RD.membership);
+  return `<div class="rd-subcard mb-3">
+    <div class="row items-center justify-between mb-3"><span class="cra-label" style="margin:0;color:var(--wine)">Event ${i + 1}</span>${rdDelBtn("events." + areaKey, i)}</div>
+    <div class="space-y-3">
+      ${rdText(p + ".name", "Name of event / focus of event")}
+      <div class="rd-grid-2">
+        ${rdText(p + ".participants", "Number of participants", { type: "number" })}
+        ${rdText(p + ".resource", "Resource persons")}
       </div>
-      ${flash && flash.error ? `<div class="mt-2">${errorNote("Couldn't read that file — please upload a .docx Word document.")}</div>` : ""}
-      ${flash && !flash.error ? `<p class="text-xs mt-2 row items-center gap-1" style="color:var(--green)">${icon("check", 12)} Loaded ${flash.count} question${flash.count !== 1 ? "s" : ""} from ${esc(flash.fileName)} — review below, then save.</p>` : ""}
+      ${fieldWrap("Structure of programme / level where it was held", `<select class="cra-select" onchange="rdSet('${p}.level', this.value)">
+        <option value="" ${!ev.level ? "selected" : ""}>Automatic — ${auto}</option>
+        ${EVENT_LEVELS.map((l) => `<option value="${l}" ${ev.level === l ? "selected" : ""}>${l}</option>`).join("")}
+      </select>`, `Picks ${auto} automatically from your membership (Parish when under a deanery); change it if the event was held at another level.`)}
+      ${rdArea(p + ".outcome", "Outcome / impact")}
+      ${rdArea(p + ".challenges", "Challenges")}
+      ${rdArea(p + ".wayForward", "Way forward / future plans")}
+      ${rdArea(p + ".ensuingActivities", "Major activities for the ensuing year")}
+      ${rdArea(p + ".specialProjects", "Special projects")}
+      ${rdArea(p + ".collaborations", "Collaborations / affiliated partnership programmes")}
+      ${rdArea(p + ".recommendations", "Recommendations")}
     </div>
-    ${preview ? `<div class="mb-4">
-      <div class="word-toolbar">
-        ${icon("file", 15)}
-        <span class="cra-display text-sm">${esc(reportTypeLabel(type))}.docx</span>
-        <span class="word-tab active">Preview — read only</span>
-      </div>
-      <div class="word-ribbon"><span class="text-xs" style="color:var(--ink-soft)">${icon("eye", 12)} This is what the ${esc(templateAudienceLabel(type))} will see and fill in — it can't be edited here. Use the questions list below to add, remove or reorder fields.</span></div>
-      <div class="word-page-wrap">
-        <div class="word-page" style="pointer-events:none">
-          <style>
-            .word-page table { width:100%; border-collapse:collapse; margin:8px 0 16px 0; }
-            .word-page table th, .word-page table td { border:1px solid #c7c1da; padding:6px 8px; font-size:11px; text-align:left; vertical-align:top; }
-            .word-page table th { background:#232a52; color:#ffffff; text-transform:uppercase; font-size:10px; letter-spacing:0.03em; }
-            .word-page table tr:nth-child(even) td { background:#f6f4ec; }
-            .word-page p { margin:0 0 10px 0; font-size:12.5px; line-height:1.6; }
-            .word-page strong { font-weight:700; }
-            .word-page em { color:#6b6578; font-style:italic; }
-            .word-page h1, .word-page h2, .word-page h3 { font-family:'Fraunces',Georgia,serif; margin:16px 0 8px; color:#232a52; }
-            .word-page .docx-banner { background:#232a52; color:#ffffff; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; text-align:center; padding:8px 10px; margin:18px 0 12px; font-size:12px; }
-          </style>
-          <div class="docx-banner" style="margin:0 0 18px 0">${esc(reportTypeLabel(type))}</div>
-          ${preview.html}
-        </div>
-      </div>
-    </div>` : ""}
-    ${leftoverFields.length === 0 && fields.length === 0 ? `<p class="text-sm mb-4" style="color:var(--ink-soft)">No fields yet — add questions below.</p>` : `
-    <div class="cra-label mb-2" style="color:var(--ink-soft)">${preview ? "All questions (drag to manage)" : "Questions"}</div>
-    <div class="space-y-2 mb-4">
-      ${fields.map((f, i) => `<div class="row items-center gap-2 p-2" style="border:1px solid var(--line);border-radius:8px">${icon("grip", 14)}<span class="cra-mono text-xs" style="width:20px;color:var(--ink-soft)">${String(i + 1).padStart(2, "0")}</span><span class="text-sm font-medium flex-1"${f.help ? ` title="${esc(f.help)}"` : ""}>${esc(f.label)}</span>${badge("violet", FIELD_TYPES.find((t) => t.value === f.type)?.label || f.type)}<button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.removeTemplateField('${type}','${f.id}')">${icon("trash", 13)}</button></div>`).join("")}
-    </div>`}
-    <div class="row sm-row gap-2 p-3" style="background:#f5f3ea;border-radius:8px;flex-direction:column">
-      <input class="cra-input flex-1" placeholder="e.g. Number of new members" value="${esc(draft.label)}" oninput="App.templateDraftInput['${type}'].label=this.value" />
-      <select class="cra-select" style="max-width:160px" onchange="App.templateDraftInput['${type}'].type=this.value">${FIELD_TYPES.map((t) => `<option value="${t.value}" ${draft.type === t.value ? "selected" : ""}>${t.label}</option>`).join("")}</select>
-      ${btnHtml({ variant: "secondary", label: "Add", iconName: "plus", attrs: `onclick="App.addTemplateField('${type}')"` })}
-    </div>
-    <div class="row items-center gap-3 mt-4">
-      ${btnHtml({ variant: "primary", label: "Save template", iconName: "upload", attrs: `onclick="App.saveTemplate('${type}')"` })}
-      ${fields.length > 0 ? btnHtml({ variant: "ghost", label: App.pdfBuilding === "blank:" + type ? "Building PDF…" : "Download blank form (PDF)", iconName: "download", attrs: `onclick="downloadBlankTemplatePdf('${type}')" ${App.pdfBuilding === "blank:" + type ? "disabled" : ""}` }) : ""}
-      ${fields.length > 0 || doc ? btnHtml({ variant: "danger", label: "Remove template", iconName: "trash", attrs: `onclick="if(confirm('Remove the ${esc(reportTypeLabel(type)).toLowerCase()} template for this scope? All its questions will disappear from the editor and the submit form.')) App.removeTemplate('${type}')"` }) : ""}
-      ${saved ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
+  </div>`;
+}
+function rdMeetingCard(i) {
+  const p = `meetings.${i}`;
+  return `<div class="rd-subcard mb-3">
+    <div class="row items-center justify-between mb-3"><span class="cra-label" style="margin:0;color:var(--wine)">Meeting ${i + 1}</span>${rdDelBtn("meetings", i)}</div>
+    <div class="space-y-3">
+      ${rdText(p + ".title", "Meeting title")}
+      <div class="rd-grid-2">${rdText(p + ".date", "Date", { type: "date" })}${rdText(p + ".venue", "Venue")}</div>
+      ${rdArea(p + ".outcomes", "Key outcomes / decisions")}
+      ${rdArea(p + ".challenges", "Challenges / problems")}
+      ${rdArea(p + ".projections", "Projections / future plans")}
+      ${rdArea(p + ".others", "Others")}
     </div>
   </div>`;
 }
 
-/* ==================================================================== */
-/*  Report submission form                                               */
-/* ==================================================================== */
+function rdSharedSections(nextNum) {
+  let h = "";
+  h += rdSection(nextNum(), "Theme of the year", rdText("theme", "Theme", { placeholder: "Theme of the year" }));
+  h += rdSection(nextNum(), "Period of report", `<div class="rd-grid-3">
+      ${rdSelect("periodType", "Period", PERIOD_TYPES, { placeholder: "Select period…", rerender: true })}
+      ${rdText("periodFrom", "From", { type: "date" })}
+      ${rdText("periodTo", "To", { type: "date" })}
+    </div>`);
+  h += rdSection(nextNum(), "Membership", rdSelect("membership", "Reporting as", MEMBERSHIP_OPTIONS, { placeholder: "Select…", rerender: true }));
+  h += rdSection(nextNum(), "Secretariat", `
+      ${rdText("email", "Email", { type: "email", placeholder: "council@example.org" })}
+      <div class="cra-label mt-4 mb-2">Executives — name, position &amp; phone number</div>
+      ${rdHead(["Name", "Position", "Phone number"])}
+      ${RD.executives.map((e, i) => `<div class="rd-row mb-2">${rdCell(`executives.${i}.name`, "Name")}${rdCell(`executives.${i}.position`, "Position")}${rdCell(`executives.${i}.phone`, "Phone number", { type: "tel" })}${rdDelBtn("executives", i)}</div>`).join("")}
+      ${rdAddBtn("executives", "Add executive")}`,
+    "Pre-filled from the executives roster your IT admin keeps — adjust any row for this report if needed.");
+  return h;
+}
 
-let submitFormValues = {};
-let submitCustomFields = [];
-
-function toggleEventField(sel) { document.getElementById("submit-event-wrap").style.display = sel.value === "event" ? "block" : "none"; }
+function rdSignoffSection(n) {
+  const people = App.org.users.filter((u) => u.parishId === App.currentUser().parishId);
+  return rdSection(n, "Sign-off", `<datalist id="rd-people">${people.map((u) => `<option value="${esc(u.name)}"></option>`).join("")}</datalist>
+    <div class="rd-grid-3">${SIGNOFFS.map((s) => `<div class="rd-subcard"><div class="cra-label mb-2" style="color:var(--wine)">${s.label}</div><div class="space-y-3">
+        ${fieldWrap("Name", `<input class="cra-input" list="rd-people" value="${esc(RD.signoff[s.key].name)}" oninput="rdSet('signoff.${s.key}.name', this.value)" onchange="rdSetSignoffName('${s.key}', this.value)" />`)}
+        ${rdText(`signoff.${s.key}.position`, "Position")}
+        ${rdText(`signoff.${s.key}.date`, "Date", { type: "date" })}
+      </div></div>`).join("")}</div>`,
+    "Appears at the bottom of the report. Signatures show automatically if the person has uploaded one to their profile; otherwise there's a line to sign by hand on the printed PDF.");
+}
 
 function submitReportFormHtml(type) {
-  const template = App.templateForSubmit(type);
-  if (!template) return emptyState("upload", "Template not ready yet", `Your president hasn't set up a ${reportTypeLabel(type).toLowerCase()} template yet.`);
-  const done = App.submitState.done;
-  const editing = App.editingReportId;
-  const editingReport = editing ? App.org.reports.find((r) => r.id === editing) : null;
-  const frequency = editingReport ? editingReport.frequency : "weekly";
-  const eventName = editingReport ? editingReport.eventName : "";
   const user = App.currentUser();
-  const isFinancial = type === "financial";
+  if (!RD || RD.type !== type) RD = newReportDraft(type, user);
+  const isFin = type === "financial";
+  const editing = App.editingReportId;
+  const done = App.submitState.done;
+  let n = 0; const nextNum = () => ++n;
+  let html = `${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}`;
+  html += rdSharedSections(nextNum);
 
-  // Financial reports carry their balance automatically: opening balance comes from the
-  // end of the previous report (or the term's starting amount for the very first one),
-  // and closing balance is always opening + income − expenditure. Neither is user-editable.
-  let openingField = null, closingField = null, incomeFields = [], expenditureFields = [];
-  let computedOpening = 0;
-  if (isFinancial) {
-    openingField = template.fields.find((f) => /opening balance/i.test(f.label)) || null;
-    closingField = template.fields.find((f) => /closing balance/i.test(f.label)) || null;
-    incomeFields = template.fields.filter((f) => f !== openingField && f !== closingField && /income/i.test(f.label));
-    expenditureFields = template.fields.filter((f) => f !== openingField && f !== closingField && /expenditure/i.test(f.label));
-    if (openingField) {
-      computedOpening = App.getOpeningBalanceFor(user, editingReport);
-      submitFormValues[openingField.id] = String(computedOpening);
-      if (closingField) {
-        const incomeSum = incomeFields.reduce((s, f) => s + (parseFloat(submitFormValues[f.id]) || 0), 0);
-        const expenditureSum = expenditureFields.reduce((s, f) => s + (parseFloat(submitFormValues[f.id]) || 0), 0);
-        submitFormValues[closingField.id] = String(computedOpening + incomeSum - expenditureSum);
-      }
+  if (!isFin) {
+    // 5. Areas of report
+    html += rdSection(nextNum(), "Areas of report", `<div class="rd-checks">${REPORT_AREAS.map((a) => `<label class="rd-check"><input type="checkbox" ${RD.areas[a.key] ? "checked" : ""} onchange="rdToggleArea('${a.key}', this.checked)" /><span><span class="cra-mono" style="color:var(--gold)">${a.numeral}.</span> ${esc(a.label)}</span></label>`).join("")}</div>
+      ${RD.areas.other ? `<div class="mt-3">${rdText("otherAreaName", "Area of report (specify)", { placeholder: "Enter the area of report" })}</div>` : ""}`,
+      "Tick every area you are reporting on — a section opens below for each one.");
+
+    // 6. Event details
+    const eventAreas = REPORT_AREAS.filter((a) => a.hasEvents && RD.areas[a.key]);
+    html += rdSection(nextNum(), "Event details", eventAreas.length ? eventAreas.map((a) => {
+      const title = a.key === "other" ? (RD.otherAreaName.trim() || "Other") : a.label;
+      return `<div class="mb-6"><div class="cra-display text-base mb-3" style="color:var(--violet);border-bottom:1px solid var(--line);padding-bottom:0.4rem"><span class="cra-mono" style="color:var(--gold)">${a.numeral}.</span> ${esc(title)}</div>
+        ${RD.events[a.key].map((_, i) => rdEventCard(a.key, i)).join("")}
+        ${rdAddBtn("events." + a.key, "Add another event")}</div>`;
+    }).join("") : `<p class="text-sm" style="color:var(--ink-soft)">Tick an activity area above (Faith, Growth, Skills, World Youth Day or Other) and its event form appears here.</p>`);
+
+    if (RD.areas.meeting) html += rdSection(nextNum(), "Meetings", `${RD.meetings.map((_, i) => rdMeetingCard(i)).join("")}${rdAddBtn("meetings", "Add another meeting")}`);
+
+    if (RD.areas.action) html += rdSection(nextNum(), "Action plan", `${rdHead(["Activity area", "Planned activity", "Timeline"])}
+      ${RD.actionPlan.map((_, i) => `<div class="rd-row mb-2"><div class="rd-cell"><select class="cra-select" onchange="rdSet('actionPlan.${i}.area', this.value)"><option value="">Activity area…</option>${ACTION_AREA_LABELS.map((l) => `<option value="${esc(l)}" ${RD.actionPlan[i].area === l ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>${rdCell(`actionPlan.${i}.activity`, "Planned activity")}${rdCell(`actionPlan.${i}.timeline`, "Timeline")}${rdDelBtn("actionPlan", i)}</div>`).join("")}
+      ${rdAddBtn("actionPlan", "Add action")}`);
+  } else {
+    const t = rdTotals(RD);
+    const accounts = `
+      <div class="cra-label mb-2">Income</div>
+      ${rdHead(["Source", "Amount (GHS)", "Date"])}
+      ${RD.income.map((_, i) => `<div class="rd-row mb-2">${rdCell(`income.${i}.source`, "Source")}${rdCell(`income.${i}.amount`, "Amount", { type: "number", recalc: true })}${rdCell(`income.${i}.date`, "Date", { type: "date" })}${rdDelBtn("income", i)}</div>`).join("")}
+      ${rdAddBtn("income", "Add income")}
+      <div class="rd-total">Total income <strong id="rd-total-income">GHS ${fmtMoney(t.income)}</strong></div>
+
+      <div class="cra-label mt-5 mb-2">Expenditure</div>
+      ${rdHead(["Item / description", "Amount (GHS)", "Date"])}
+      ${RD.expenditure.map((_, i) => `<div class="rd-row mb-2">${rdCell(`expenditure.${i}.item`, "Item / description")}${rdCell(`expenditure.${i}.amount`, "Amount", { type: "number", recalc: true })}${rdCell(`expenditure.${i}.date`, "Date", { type: "date" })}${rdDelBtn("expenditure", i)}</div>`).join("")}
+      ${rdAddBtn("expenditure", "Add expenditure")}
+      <div class="rd-total">Total expenditure <strong id="rd-total-exp">GHS ${fmtMoney(t.exp)}</strong></div>
+
+      <div class="cra-label mt-5 mb-2">Balance</div>
+      <div class="rd-subcard" style="background:linear-gradient(135deg, rgba(44,36,81,0.06), rgba(163,129,47,0.08));border-color:var(--gold)">
+        <div class="rd-balance-line"><span>Opening balance <span class="text-xs" style="color:var(--ink-soft)">(carried over automatically)</span></span><strong>GHS ${fmtMoney(num0(RD.openingBalance))}</strong></div>
+        <div class="rd-balance-line"><span>+ Total income</span><strong id="rd-bal-income">GHS ${fmtMoney(t.income)}</strong></div>
+        <div class="rd-balance-line"><span>− Total expenditure</span><strong id="rd-bal-exp">GHS ${fmtMoney(t.exp)}</strong></div>
+        <div class="rd-balance-line" style="border-top:1px solid var(--gold);padding-top:0.5rem;margin-top:0.25rem"><span class="font-semibold">Balance</span><strong id="rd-closing" style="font-size:1.1rem">GHS ${fmtMoney(t.closing)}</strong></div>
+      </div>`;
+    html += rdSection(nextNum(), "Accounts", accounts, "The balance is worked out for you: opening balance + income − expenditure.");
+
+    if (RD.periodType === "Final Report") {
+      html += rdSection(nextNum(), "Budget (Final Report)", `${rdHead(["Item", "Unit cost (GHS)", "Quantity", "Total cost (GHS)"])}
+        ${RD.budget.map((b, i) => `<div class="rd-row mb-2">${rdCell(`budget.${i}.item`, "Item")}${rdCell(`budget.${i}.unitCost`, "Unit cost", { type: "number", recalc: true })}${rdCell(`budget.${i}.qty`, "Quantity", { type: "number", recalc: true })}<div class="rd-cell"><div class="cra-input rd-total-cell" id="rd-b-total-${i}">GHS ${fmtMoney(num0(b.unitCost) * num0(b.qty))}</div></div>${rdDelBtn("budget", i)}</div>`).join("")}
+        ${rdAddBtn("budget", "Add budget item")}
+        <div class="rd-total">Total budget <strong id="rd-b-grand">GHS ${fmtMoney(t.budget)}</strong></div>`,
+        "Total cost = unit cost × quantity, calculated automatically.");
+    } else {
+      html += `<p class="text-xs mb-4" style="color:var(--ink-soft)">The Budget section appears here when the period of report is set to “Final Report”.</p>`;
     }
   }
-  // Executive roster fields (Chairman/Secretary/etc. name & phone) auto-fill from
-  // whatever the IT admin saved for this scope — never retyped per report.
-  const roster = App.getRosterForScope(user);
-  const rosterFieldMap = {};
-  template.fields.forEach((f) => {
-    if (openingField && f.id === openingField.id) return;
-    if (closingField && f.id === closingField.id) return;
-    const m = matchRosterField(f.label);
-    if (m) rosterFieldMap[f.id] = m;
-  });
-  Object.keys(rosterFieldMap).forEach((fid) => {
-    const { role, kind } = rosterFieldMap[fid];
-    submitFormValues[fid] = (roster[role] && roster[role][kind]) || "";
-  });
 
-  // Renders one question as a fillable "slot" — an editable input/textarea for ordinary
-  // questions, or a locked read-only slot for values that are computed/auto-filled
-  // (financial balances, roster name/phone). Used both inline in the document body and
-  // for any question that couldn't be matched to a spot in the uploaded .docx text.
-  const editSlot = (f) => {
-    if (openingField && f.id === openingField.id) {
-      const val = submitFormValues[f.id] || "0";
-      return `<span class="docx-slot-readonly" title="Carried over automatically from your last report's closing balance">GHS ${fmtMoney(parseFloat(val) || 0)}<input type="hidden" id="fin-opening-hidden" name="${f.id}" value="${esc(val)}" /></span>`;
-    }
-    if (closingField && f.id === closingField.id) {
-      const val = submitFormValues[f.id] || "0";
-      return `<span class="docx-slot-readonly" id="fin-closing-display" title="Calculated automatically as opening balance + income − expenditure">GHS ${fmtMoney(parseFloat(val) || 0)}<input type="hidden" id="fin-closing-hidden" name="${f.id}" value="${esc(val)}" /></span>`;
-    }
-    if (rosterFieldMap[f.id]) {
-      const val = submitFormValues[f.id] || "";
-      return val
-        ? `<span class="docx-slot-readonly">${esc(val)}<input type="hidden" name="${f.id}" value="${esc(val)}" /></span>`
-        : `<span class="docx-slot-readonly" style="color:var(--danger)">Not set yet<input type="hidden" name="${f.id}" value="" /></span>`;
-    }
-    const isIncome = incomeFields.some((inf) => inf.id === f.id);
-    const isExpenditure = expenditureFields.some((exf) => exf.id === f.id);
-    const finAttrs = isIncome ? ` data-fin-role="income" oninput="recalcFinancial()"` : isExpenditure ? ` data-fin-role="expenditure" oninput="recalcFinancial()"` : "";
-    if (f.type === "textarea") return `<textarea class="docx-slot" name="${f.id}" rows="2" placeholder="Click to fill in — ${esc(f.label)}">${esc(submitFormValues[f.id] || "")}</textarea>`;
-    return `<input class="docx-slot" type="${f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}" name="${f.id}"${finAttrs} placeholder="Click to fill in — ${esc(f.label)}" value="${esc(submitFormValues[f.id] || "")}" />`;
-  };
+  html += rdSignoffSection(nextNum());
+  html += `<div class="row items-center gap-3 mt-2">
+      ${btnHtml({ variant: "primary", label: editing ? "Save changes" : "Submit report", iconName: "upload", attrs: `type="button" onclick="rdSubmit()"` })}
+      ${done ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} Submitted — the president can now review it</span>` : ""}
+    </div>`;
+  return html;
+}
 
-  // Renders the uploaded .docx template itself — headings, tables and all — as the
-  // fillable document, dropping an editable slot in wherever a parsed question was
-  // found in the source text. This is what makes filling a report feel like editing
-  // the real Word document instead of answering a disconnected list of questions.
-  let docBodyHtml = "", matchedIds = new Set();
-  if (template.docHtml) {
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = template.docHtml;
-
-    // Auto-fill any NAME/POSITION/(PHONE) roster table straight from the executive
-    // roster, the same way the finished report view does — it's locked, not typed.
-    Array.from(wrapper.querySelectorAll("table")).forEach((table) => {
-      const rows = Array.from(table.querySelectorAll("tr"));
-      if (!rows.length) return;
-      const headerCells = Array.from(rows[0].children).map((c) => (c.textContent || "").trim().toLowerCase());
-      const nameIdx = headerCells.findIndex((h) => /name/.test(h));
-      const posIdx = headerCells.findIndex((h) => /position/.test(h));
-      const phoneIdx = headerCells.findIndex((h) => /phone|tel|contact/.test(h));
-      if (nameIdx === -1 || posIdx === -1) return;
-      rows.slice(1).forEach((tr) => {
-        const cells = Array.from(tr.children);
-        const posText = (cells[posIdx] && cells[posIdx].textContent || "").trim();
-        const roleKey = ROSTER_ROLES_DISPLAY.find((r) => simplifyRoleText(r) === simplifyRoleText(posText));
-        if (!roleKey) return;
-        const info = roster[roleKey] || {};
-        const nameField = template.fields.find((f) => f.label === `${roleKey} — Name`);
-        const phoneField = template.fields.find((f) => f.label === `${roleKey} — Phone`);
-        if (cells[nameIdx]) {
-          const val = info.name || "";
-          cells[nameIdx].innerHTML = (val ? `<span class="docx-roster-val">${esc(val)}</span>` : `<span class="docx-roster-missing">Not set</span>`) + (nameField ? `<input type="hidden" name="${nameField.id}" value="${esc(val)}" />` : "");
-          if (nameField) matchedIds.add(nameField.id);
-        }
-        if (phoneIdx !== -1 && cells[phoneIdx]) {
-          const val = info.phone || "";
-          cells[phoneIdx].innerHTML = (val ? `<span class="docx-roster-val">${esc(val)}</span>` : `<span class="docx-roster-missing">Not set</span>`) + (phoneField ? `<input type="hidden" name="${phoneField.id}" value="${esc(val)}" />` : "");
-          if (phoneField) matchedIds.add(phoneField.id);
-        }
-      });
+function rdSubmit() {
+  const d = JSON.parse(JSON.stringify(RD));
+  const isFin = d.type === "financial";
+  if (!d.periodType) { alert("Please choose the period of report."); return; }
+  if (!d.signoff.prepared.name.trim()) { alert("Please fill in who prepared the report."); return; }
+  d.executives = d.executives.filter(nonEmptyRow);
+  if (!isFin) {
+    if (!REPORT_AREAS.some((a) => d.areas[a.key])) { alert("Pick at least one area of report."); return; }
+    const auto = autoLevelFor(d.membership);
+    REPORT_AREAS.forEach((a) => {
+      if (a.hasEvents) d.events[a.key] = d.areas[a.key] ? d.events[a.key].filter(nonEmptyRow).map((ev) => ({ ...ev, level: ev.level || auto })) : [];
     });
-
-    // Give PART A / PART B markers the navy-banner treatment they get in the finished
-    // report, and drop a fillable slot in right after whichever line each question came from.
-    const blocks = Array.from(wrapper.children).length ? Array.from(wrapper.children) : [wrapper];
-    blocks.forEach((el) => {
-      const text = (el.textContent || "").trim();
-      if (isPartMarker(text)) { el.classList.add("docx-banner"); return; }
-      const lower = text.toLowerCase();
-      const f = template.fields.find((fld) => !matchedIds.has(fld.id) && text && lower.indexOf(fld.label.toLowerCase()) !== -1);
-      if (f) { matchedIds.add(f.id); el.insertAdjacentHTML("afterend", editSlot(f)); }
-    });
-    docBodyHtml = wrapper.innerHTML;
+    d.meetings = d.areas.meeting ? d.meetings.filter(nonEmptyRow) : [];
+    d.actionPlan = d.areas.action ? d.actionPlan.filter(nonEmptyRow) : [];
+    if (!d.areas.other) d.otherAreaName = "";
+    delete d.income; delete d.expenditure; delete d.budget; delete d.openingBalance;
+  } else {
+    d.income = d.income.filter(nonEmptyRow);
+    d.expenditure = d.expenditure.filter(nonEmptyRow);
+    d.budget = d.periodType === "Final Report" ? d.budget.filter(nonEmptyRow).map((b) => ({ ...b, total: num0(b.unitCost) * num0(b.qty) })) : [];
+    const t = rdTotals(d);
+    d.totalIncome = t.income; d.totalExpenditure = t.exp; d.closingBalance = t.closing; d.budgetTotal = t.budget;
+    delete d.areas; delete d.events; delete d.meetings; delete d.actionPlan; delete d.otherAreaName;
   }
-  const leftoverFields = template.fields.filter((f) => !matchedIds.has(f.id));
-
-  return `
-  ${editing ? `<div class="row items-center gap-2 mb-4">${badge("gold", "Editing a submitted report")}<button class="link-btn text-sm" onclick="App.cancelEditReport()">Cancel edit</button></div>` : ""}
-  ${isFinancial && openingField ? `<div class="row items-center gap-3 p-4 mb-4 cra-card" style="background:linear-gradient(135deg, rgba(44,36,81,0.06), rgba(163,129,47,0.08));border-color:var(--gold)">
-    <div class="cra-seal" style="width:42px;height:42px">${icon("scroll", 18)}</div>
-    <div><div class="cra-label mb-1">Balance carried into this report</div><div class="cra-display" style="font-size:1.35rem;font-weight:600">GHS ${fmtMoney(computedOpening)}</div><p class="text-xs mt-1" style="color:var(--ink-soft)">Fills in automatically in the document below as your opening balance — enter income and expenditure and the closing balance updates itself.</p></div>
-  </div>` : ""}
-  <form onsubmit="return handleSubmitReport(event,'${type}')">
-    <div class="word-toolbar">
-      ${icon("file", 15)}
-      <span class="cra-display text-sm">${esc(reportTypeLabel(type))}.docx</span>
-      <span class="word-tab active">Fill in</span>
-    </div>
-    <div class="word-ribbon">
-      <div class="row gap-3 items-start wrap">
-        <div class="flex-1" style="min-width:220px">${fieldWrap("Report heading", `<input id="submit-heading" class="cra-input" placeholder="e.g. TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___" value="${esc(editingReport ? (editingReport.heading || "") : App.getHeadingForScope(user))}" />`)}</div>
-        <div style="width:160px">${fieldWrap("Frequency", `<select id="submit-frequency" class="cra-select" onchange="toggleEventField(this)">
-          <option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option>
-          <option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option>
-          <option value="annual" ${frequency === "annual" ? "selected" : ""}>Annual</option>
-          <option value="event" ${frequency === "event" ? "selected" : ""}>Current programme</option>
-        </select>`)}</div>
-        <div style="width:170px">${fieldWrap("Date recorded", `<input id="submit-date-recorded" class="cra-input" type="date" value="${esc(editingReport && editingReport.recordedDate ? editingReport.recordedDate : todayISODate())}" />`)}</div>
-      </div>
-      <div id="submit-event-wrap" style="display:${frequency === "event" ? "block" : "none"};margin-top:0.65rem">
-        ${fieldWrap("Programme / event name", `<input id="submit-eventName" class="cra-input" placeholder="e.g. Diocesan Prayer Rally" value="${esc(eventName || "")}" />`)}
-      </div>
-    </div>
-    <div class="word-page-wrap">
-      <div class="word-page">
-        ${template.docHtml ? `<style>
-          .word-page table { width:100%; border-collapse:collapse; margin:8px 0 16px 0; }
-          .word-page table th, .word-page table td { border:1px solid #c7c1da; padding:6px 8px; font-size:11px; text-align:left; vertical-align:top; }
-          .word-page table th { background:#232a52; color:#ffffff; text-transform:uppercase; font-size:10px; letter-spacing:0.03em; }
-          .word-page table tr:nth-child(even) td { background:#f6f4ec; }
-          .word-page p { margin:0 0 10px 0; font-size:12.5px; line-height:1.6; }
-          .word-page strong { font-weight:700; }
-          .word-page em { color:#6b6578; font-style:italic; }
-          .word-page h1, .word-page h2, .word-page h3 { font-family:'Fraunces',Georgia,serif; margin:16px 0 8px; color:#232a52; }
-          .word-page .docx-banner { background:#232a52; color:#ffffff; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; text-align:center; padding:8px 10px; margin:18px 0 12px; font-size:12px; }
-        </style>
-        <div class="docx-banner" style="margin:0 0 18px 0">${esc(reportTypeLabel(type))}</div>
-        ${docBodyHtml}` : `<p class="text-sm mb-4" style="color:var(--ink-soft)">No Word template file was uploaded for this report — fill in the questions below.</p>`}
-        ${leftoverFields.length ? `<div style="margin-top:${template.docHtml ? "22px" : "0"}">
-          ${template.docHtml ? `<div class="docx-banner" style="margin-bottom:14px">Additional items</div>` : ""}
-          ${leftoverFields.map((f) => `<div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div>${f.help ? `<p class="text-xs mb-1" style="color:var(--ink-soft)">${esc(f.help)}</p>` : ""}${editSlot(f)}`).join("")}
-        </div>` : ""}
-        ${submitCustomFields.length ? `<div class="docx-banner" style="margin:22px 0 14px 0">Your own questions</div>` : ""}
-        ${submitCustomFields.map((f) => `<div class="row items-start gap-2">
-            <div class="flex-1"><div style="font-size:12.5px;font-weight:600;margin-bottom:2px">${esc(f.label)}</div><textarea class="docx-slot" rows="2" name="${f.id}">${esc(submitFormValues[f.id] || "")}</textarea></div>
-            <button type="button" class="cra-btn cra-btn-ghost cra-btn-icon" style="margin-top:0.2rem" onclick="removeCustomSubmitField('${f.id}')">${icon("trash", 13)}</button>
-          </div>`).join("")}
-      </div>
-    </div>
-    <div class="row gap-2 p-3 mt-3" style="background:#f5f3ea;border-radius:8px">
-      <input id="custom-field-label" class="cra-input flex-1" placeholder="Add your own question…" />
-      ${btnHtml({ variant: "secondary", label: "Add question", iconName: "plus", attrs: `type="button" onclick="addCustomSubmitField()"` })}
-    </div>
-    <div class="row items-center gap-3 mt-3">
-      ${btnHtml({ variant: "primary", label: editing ? "Save changes" : "Submit report", iconName: "upload", attrs: `type="submit"` })}
-      ${done ? `<span class="text-sm row items-center gap-1" style="color:var(--green)">${icon("check", 14)} ${editing ? "Saved" : "Submitted — the president can now review it"}</span>` : ""}
-    </div>
-  </form>`;
+  App.submitReportV2(d);
 }
 
-// Recomputes the (locked) closing balance whenever an income or expenditure field
-// changes, so the running balance always reflects opening + income − expenditure live.
-function recalcFinancial() {
-  const openingEl = document.getElementById("fin-opening-hidden");
-  const closingHidden = document.getElementById("fin-closing-hidden");
-  if (!openingEl || !closingHidden) return;
-  const opening = parseFloat(openingEl.value) || 0;
-  let income = 0, expenditure = 0;
-  document.querySelectorAll('[data-fin-role="income"]').forEach((el) => { income += parseFloat(el.value) || 0; });
-  document.querySelectorAll('[data-fin-role="expenditure"]').forEach((el) => { expenditure += parseFloat(el.value) || 0; });
-  const closing = opening + income - expenditure;
-  closingHidden.value = closing.toFixed(2);
-  const closingDisplay = document.getElementById("fin-closing-display");
-  if (closingDisplay) closingDisplay.textContent = "GHS " + fmtMoney(closing);
-}
-
-function addCustomSubmitField() {
-  const el = document.getElementById("custom-field-label");
-  const label = el.value.trim();
-  if (!label) return;
-  submitCustomFields.push({ id: uid(), label, type: "textarea" });
-  App.render();
-}
-function removeCustomSubmitField(id) { submitCustomFields = submitCustomFields.filter((f) => f.id !== id); App.render(); }
-
-function handleSubmitReport(e, type) {
-  e.preventDefault();
-  const template = App.templateForSubmit(type);
-  const heading = document.getElementById("submit-heading").value;
-  const frequency = document.getElementById("submit-frequency").value;
-  const recordedDate = document.getElementById("submit-date-recorded").value || todayISODate();
-  const eventNameEl = document.getElementById("submit-eventName");
-  const eventName = eventNameEl ? eventNameEl.value : "";
-  const values = {};
-  [...template.fields, ...submitCustomFields].forEach((f) => { const el = e.target.querySelector(`[name="${f.id}"]`); if (el) values[f.id] = el.value; });
-  const customFieldsCopy = submitCustomFields.map((f) => ({ ...f }));
-  App.submitReport(type, values, frequency, eventName, customFieldsCopy, recordedDate, heading);
-  submitFormValues = {}; submitCustomFields = [];
-  return false;
-}
 
 /* ==================================================================== */
 /*  Reports list                                                          */
@@ -2221,7 +2207,7 @@ function reportsTableHtml(reports, showLocal, allowEdit, allowDelete) {
       <td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${new Date(r.submittedAt).toLocaleDateString()}</td>
       <td class="px-4 py-3 text-right">
         <button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.viewReport('${r.id}')">${icon("eye", 13)} View</button>
-        ${allowEdit && r.submittedBy === user.id ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.editReport('${r.id}')">${icon("upload", 13)} Edit</button>` : ""}
+        ${allowEdit && r.submittedBy === user.id && r.version === 2 ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" onclick="App.editReport('${r.id}')">${icon("upload", 13)} Edit</button>` : ""}
         ${allowDelete ? `<button class="cra-btn cra-btn-ghost cra-btn-sm" style="color:var(--wine)" onclick="if(confirm('Delete report ${esc(r.regNo)} from ${esc(r.submitterName)}? This can\\'t be undone.')) App.removeReport('${r.id}')">${icon("trash", 13)} Delete</button>` : ""}
       </td>
     </tr>`).join("")}</tbody>
@@ -2337,12 +2323,10 @@ function overviewPanelHtml(ctx) {
   let cards = "";
   if (isAdmin) {
     cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('members')">${icon("users", 18, "")}<div class="font-semibold mb-1 mt-2">Manage members</div><p class="text-sm" style="color:var(--ink-soft)">Add or remove executives across the parish and its locals.</p></button>`;
-    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('template')">${icon("upload", 18, "")}<div class="font-semibold mb-1 mt-2">Amend templates</div><p class="text-sm" style="color:var(--ink-soft)">Edit report templates for the parish or any local.</p></button>`;
     cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('parishsettings')">${icon("cog", 18, "")}<div class="font-semibold mb-1 mt-2">Parish settings</div><p class="text-sm" style="color:var(--ink-soft)">Update the parish's name and logo.</p></button>`;
   }
   if (isPresident && user.level === "parish") cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('locals')">${icon("userPlus", 18, "")}<div class="font-semibold mb-1 mt-2">Register a local</div><p class="text-sm" style="color:var(--ink-soft)">Add a local so its executives can register underneath your parish.</p></button>`;
   if (isPresident) {
-    cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('template')">${icon("upload", 18, "")}<div class="font-semibold mb-1 mt-2">Set up report templates</div><p class="text-sm" style="color:var(--ink-soft)">Lay out the fields your secretary and treasurer will fill in.</p></button>`;
     cards += `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('reports')">${icon("eye", 18, "")}<div class="font-semibold mb-1 mt-2">Review submitted reports</div><p class="text-sm" style="color:var(--ink-soft)">Read and download a filled PDF, ready to print.</p></button>`;
   }
   reportTypes.forEach((type) => {
@@ -2481,7 +2465,7 @@ function rosterAdminViewHtml() {
     <button class="cra-btn ${scope.level === "parish" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminRosterScope('parish','${user.parishId}')">Parish executives</button>
     ${org.locals.filter((l) => l.parishId === user.parishId).map((l) => `<button class="cra-btn ${scope.level === "local" && scope.id === l.id ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminRosterScope('local','${l.id}')">${esc(l.name)}</button>`).join("")}
   </div>`;
-  return `${pageHeader("Executives", "Executives roster", "Enter each executive's name and phone number for this scope — they'll fill in automatically on every report that asks for them, for every report type. Only the IT admin can edit this.")}
+  return `${pageHeader("Executives", "Executives roster", "Enter each executive's name and phone number for this scope — they'll pre-fill the Secretariat section of every report (the Secretary can still adjust a row on a particular report). Only the IT admin can edit this roster.")}
   ${scopeSwitcher}
   <div class="cra-card cra-card-accent p-5 max-w-2xl">
     <form onsubmit="return handleAdminRosterSubmit(event)" class="space-y-3">
@@ -2542,10 +2526,7 @@ function renderApp() {
   const nav = [{ id: "overview", label: "Overview", iconName: "home" }];
   if (isAdmin) { nav.push({ id: "members", label: "Members", iconName: "users" }); }
   if ((user.level === "parish" && isPresident) || isAdmin) nav.push({ id: "locals", label: "Locals", iconName: "building" });
-  if (isPresident || isAdmin) {
-    nav.push({ id: "template", label: "Report templates", iconName: "upload" });
-    if (!isAdmin) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
-  }
+  if (isPresident) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
   if (isAdmin) nav.push({ id: "reports", label: "All reports", iconName: "file" });
   if (isAdmin) nav.push({ id: "roster", label: "Executives roster", iconName: "userPlus" });
   reportTypes.forEach((type) => nav.push({ id: `submit:${type}`, label: `Submit ${reportTypeLabel(type).split(" ")[0].toLowerCase()}`, iconName: REPORT_TYPE_ICON[type] }));
@@ -2577,26 +2558,6 @@ function renderApp() {
       const reportCount = org.reports.filter((r) => r.ownerId === l.id).length;
       return `<div class="cra-card p-4"><div class="row items-center gap-2 mb-2">${icon("building", 15)}<span class="font-semibold">${esc(l.name)}</span></div><div class="text-xs mb-3" style="color:var(--ink-soft)">${esc(l.location)}</div><div class="row gap-2">${badge("violet", `${execCount} executive${execCount !== 1 ? "s" : ""}`)}${badge("green", `${reportCount} report${reportCount !== 1 ? "s" : ""}`)}${!l.presidentId ? badge("wine", "No president yet") : ""}</div></div>`;
     }).join("")}</div>`;
-  } else if (App.view === "template" && (isPresident || isAdmin)) {
-    content = pageHeader("Report layout", "Report templates", "Lay out the fields your secretary and financial secretary/treasurer will fill in.", isAdmin && org.templates.length > 0 ? btnHtml({ variant: "danger", label: "Remove all templates", iconName: "trash", attrs: `onclick="if(confirm('Remove every template across the whole parish and all its locals? All questions everywhere will disappear from every submit form until new templates are set up. This can\\'t be undone.')) App.removeAllTemplates()"` }) : "");
-    if (isAdmin) {
-      const scope = App.adminTemplateScope || App.scopeFor(user);
-      content += `<div class="row wrap gap-2 mb-5">
-        <button class="cra-btn ${scope.level === "parish" ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminTemplateScope('parish','${user.parishId}')">Parish executives</button>
-        ${org.locals.filter((l) => l.parishId === user.parishId).map((l) => `<button class="cra-btn ${scope.level === "local" && scope.id === l.id ? "cra-btn-secondary" : "cra-btn-ghost"} px-4 py-2 text-sm" onclick="App.setAdminTemplateScope('local','${l.id}')">${esc(l.name)}</button>`).join("")}
-      </div>`;
-      const headingEntity = scope.level === "parish" ? org.parishes.find((p) => p.id === scope.id) : org.locals.find((l) => l.id === scope.id);
-      content += `<div class="cra-card cra-card-accent p-5 mb-5">
-        <div class="cra-label mb-1">Report heading</div>
-        <p class="text-xs mb-3" style="color:var(--ink-soft)">One heading, shared by every template (Programme, Meeting, Financial) for this scope — e.g. the AGCM number, venue, and dates. Secretaries can still edit their own copy of it when they submit a report.</p>
-        <form class="row gap-2 items-start" onsubmit="return handleReportHeadingSubmit(event,'${scope.level}','${scope.id}')">
-          <div class="flex-1"><input id="report-heading-input" class="cra-input" placeholder="e.g. TO THE 27TH GODYC AGCM HELD AT ___ FROM ___ – ___" value="${esc((headingEntity && headingEntity.reportHeading) || "")}" /></div>
-          ${btnHtml({ variant: "secondary", label: "Save", attrs: `type="submit"` })}
-          ${App.headingSavedFlash ? `<span class="text-sm row items-center gap-1 self-center" style="color:var(--green)">${icon("check", 14)} Saved</span>` : ""}
-        </form>
-      </div>`;
-    }
-    content += `<div class="space-y-5">${templateEditorHtml("program")}${templateEditorHtml("meeting")}${templateEditorHtml("financial")}</div>`;
   } else if (App.view === "reports" && isAdmin) {
     const allReports = org.reports.map((r) => { const l = org.locals.find((x) => x.id === r.ownerId); return { ...r, localName: l ? l.name : null }; });
     content = pageHeader("Admin", "All reports", "Every report submitted across the parish and its locals. You can delete a report if it was submitted in error.");
@@ -2613,7 +2574,7 @@ function renderApp() {
     </div>`;
     content += reportsTableHtml(App._parishReportsTab === "locals" ? myLocalReports : myOwnReports, App._parishReportsTab === "locals");
   } else if (App.view === "submit" && reportTypes.includes(App.submitType)) {
-    content = pageHeader(user.level === "parish" ? "Parish report" : "Local report", `Submit ${reportTypeLabel(App.submitType).toLowerCase()}`, "Fill in the fields your president laid out, or add your own questions. Submitting builds the finished report automatically.");
+    content = pageHeader(user.level === "parish" ? "Parish report" : "Local report", `Submit ${reportTypeLabel(App.submitType).toLowerCase()}`, "Fill in each section below. Submitting builds the finished report, with its Prepared / Endorsed / Vetted sign-off, ready to download as a PDF.");
     content += submitReportFormHtml(App.submitType);
   } else if (App.view === "submissions" && reportTypes.length) {
     content = pageHeader("History", "My submissions", "Everything you've filed, in order. You can still open and edit an answer after submitting.");
