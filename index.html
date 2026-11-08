@@ -4,6 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Parish Register</title>
+<meta name="theme-color" content="#232a52" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -585,6 +589,7 @@ const App = {
   adminTemplateScope: null,
   adminRosterScope: null,
   themeDraft: null,
+  pendingView: null,
   newAreaName: "",
   submitState: { done: false },
   submitType: null,
@@ -600,6 +605,7 @@ const App = {
   async init() {
     const [org, sess] = await Promise.all([loadOrg(), loadSession()]);
     this.org = org;
+    const dl = window.location.hash.match(/^#\/([\w-]+)$/); if (dl) this.pendingView = dl[1];
     // A password-reset email link lands back here with these query params (see the
     // actionCodeSettings passed to sendPasswordResetEmail). Handle it before anything
     // else, and always end up on the login screen once it's resolved — whether or not
@@ -2197,6 +2203,81 @@ function rdSignoffSection(n) {
 
 
 /* ==================================================================== */
+/*  Home-screen shortcuts: app icon, install, and links to each screen    */
+/* ==================================================================== */
+let deferredInstall = null, pwaKey = "", manifestUrl = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredInstall = e; if (App.org && App.screen === "app") App.render(); });
+window.addEventListener("appinstalled", () => { deferredInstall = null; if (App.org && App.screen === "app") App.render(); });
+function isStandalone() { return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true; }
+
+// Draws the app icon: the parish logo (or its initials) in a ring on the register's navy.
+function drawAppIcon(size, logoUrl, initials) {
+  return new Promise((resolve) => {
+    const c = document.createElement("canvas"); c.width = c.height = size; const x = c.getContext("2d");
+    x.fillStyle = "#232a52"; x.fillRect(0, 0, size, size);
+    const cx = size / 2, r = size * 0.32;
+    const finish = (img) => {
+      x.save(); x.beginPath(); x.arc(cx, cx, r, 0, Math.PI * 2); x.closePath(); x.fillStyle = "#fbf8ee"; x.fill(); x.clip();
+      if (img) { const k = Math.min((2 * r) / img.width, (2 * r) / img.height) * 0.9; const w = img.width * k, h = img.height * k; x.drawImage(img, cx - w / 2, cx - h / 2, w, h); }
+      else { x.fillStyle = "#232a52"; x.font = `700 ${Math.round(size * 0.26)}px Georgia, serif`; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(initials, cx, cx + size * 0.01); }
+      x.restore(); x.beginPath(); x.arc(cx, cx, r, 0, Math.PI * 2); x.lineWidth = size * 0.025; x.strokeStyle = "#c9a24a"; x.stroke();
+      resolve(c.toDataURL("image/png"));
+    };
+    if (logoUrl) { const im = new Image(); im.onload = () => finish(im); im.onerror = () => finish(null); im.src = logoUrl; } else finish(null);
+  });
+}
+function screenUrl(id) { return window.location.origin + window.location.pathname + "#/" + id; }
+function pwaLink(rel, href) { let l = document.querySelector(`link[rel="${rel}"]`); if (!l) { l = document.createElement("link"); l.rel = rel; document.head.appendChild(l); } l.href = href; }
+async function pwaSync(nav, parish) {
+  const name = (parish && parish.name) || "Parish Register";
+  const logo = parish && parish.logoDataUrl;
+  const linkable = nav.filter((n) => !n.id.includes(":"));
+  const key = [name, logo ? logo.length : 0, linkable.map((n) => n.id).join(",")].join("|");
+  if (key === pwaKey) return; pwaKey = key;
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "PR";
+  const [i192, i512, i180] = await Promise.all([192, 512, 180].map((n) => drawAppIcon(n, logo, initials)));
+  pwaLink("icon", i192); pwaLink("apple-touch-icon", i180);
+  let t = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+  if (!t) { t = document.createElement("meta"); t.name = "apple-mobile-web-app-title"; document.head.appendChild(t); } t.content = name.length > 14 ? initials + " Register" : name;
+  // Long-press the installed icon to jump straight to a screen (Android/desktop).
+  const pick = [linkable.find((n) => n.id === "overview"), linkable.find((n) => n.id === "actionplan"), ...linkable.filter((n) => !["overview", "actionplan"].includes(n.id))].filter(Boolean).slice(0, 4);
+  const manifest = {
+    name, short_name: name.length > 14 ? initials + " Register" : name,
+    start_url: window.location.origin + window.location.pathname, display: "standalone", background_color: "#232a52", theme_color: "#232a52",
+    icons: [{ src: i192, sizes: "192x192", type: "image/png", purpose: "any" }, { src: i512, sizes: "512x512", type: "image/png", purpose: "any" }, { src: i512, sizes: "512x512", type: "image/png", purpose: "maskable" }],
+    shortcuts: pick.map((n) => ({ name: n.label, url: screenUrl(n.id), icons: [{ src: i192, sizes: "192x192", type: "image/png" }] })),
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/manifest+json" }));
+  pwaLink("manifest", url); if (manifestUrl) URL.revokeObjectURL(manifestUrl); manifestUrl = url;
+}
+// Called on every app render: keeps the tab title + address in step with the current screen, so a
+// browser/phone "add to home screen" of the open screen gets that screen's name and link.
+function pwaHook(nav, parish) {
+  const name = (parish && parish.name) || "Parish Register";
+  if (App.pendingView) { if (nav.some((n) => n.id === App.pendingView && !n.id.includes(":"))) App.view = App.pendingView; App.pendingView = null; }
+  const cur = nav.find((n) => n.id === App.view);
+  document.title = (cur ? cur.label + " · " : "") + name;
+  try { if (cur && !cur.id.includes(":") && window.location.hash !== "#/" + cur.id) history.replaceState(null, "", "#/" + cur.id); } catch (e) {}
+  pwaSync(nav, parish);
+}
+async function installApp() {
+  if (deferredInstall) { deferredInstall.prompt(); try { await deferredInstall.userChoice; } catch (e) {} deferredInstall = null; App.render(); return; }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  alert(ios ? "To add the register to your home screen: tap the Share button in Safari, then “Add to Home Screen”."
+            : "To add the register to your home screen: open your browser menu and choose “Install app” or “Add to Home screen”.");
+}
+async function shortcutToScreen() {
+  const link = screenUrl(App.view);
+  try { await navigator.clipboard.writeText(link); } catch (e) {}
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  alert("Shortcut for this screen\n\n" + (ios
+    ? "Tap Share in Safari, then “Add to Home Screen”. The shortcut opens straight to this screen with the register's icon."
+    : "Open your browser menu and choose “Add to Home screen” (or “Create shortcut”). It opens straight to this screen with the register's icon.")
+    + "\n\nThe link to this screen has also been copied:\n" + link);
+}
+
+
+/* ==================================================================== */
 /*  Theme of the year card, Action plan tab, Report settings (IT admin)   */
 /* ==================================================================== */
 
@@ -2807,6 +2888,7 @@ function renderApp() {
   const initials = user.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
   const activeNavId = App.view === "submit" ? `submit:${App.submitType}` : App.view;
 
+  pwaHook(nav, org.parishes.find((p) => p.id === user.parishId));
   let content = "";
   if (App.view === "overview") {
     content = overviewPanelHtml({ user, parish, local, myLocals, myOwnReports, myLocalReports, mySubmissions, reportTypes, isPresident, isAdmin });
@@ -2876,6 +2958,8 @@ function renderApp() {
           <div class="cra-seal" style="width:30px;height:30px;font-size:11px;border-color:var(--gold)">${initials}</div>
           <div class="flex-1" style="min-width:0"><div class="text-xs font-medium truncate" style="color:#fff">${esc(user.name)}</div><div class="text-xs truncate" style="color:#c9c3e6">${esc(isAdmin ? "IT Admin" : user.position)} · ${user.level === "parish" ? "Parish" : user.level === "local" ? "Local" : "Admin"}</div></div>
         </div>
+        <button class="cra-nav-item w-full" onclick="shortcutToScreen()">${icon("pin", 15)} Shortcut to this screen</button>
+        ${isStandalone() ? "" : `<button class="cra-nav-item w-full" onclick="installApp()">${icon("download", 15)} Add to home screen</button>`}
         <button class="cra-nav-item w-full" onclick="App.doLogout()">${icon("logout", 15)} Log out</button>
       </div>
     </aside>
