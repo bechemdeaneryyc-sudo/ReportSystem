@@ -515,7 +515,18 @@ function defaultFinancialFields() {
 /*  Storage (Firestore, with local fallback)                             */
 /* ==================================================================== */
 
-function emptyOrg() { return { users: [], parishes: [], locals: [], templates: [], reports: [] }; }
+function emptyOrg() { return { users: [], parishes: [], locals: [], deaneries: [], templates: [], reports: [] }; }
+
+// Latest copy of the register straight from Firestore (null if unavailable). Used by deanery writes/refresh.
+async function fetchLatestOrg() {
+  if (!firestoreDb) return null;
+  try {
+    await ensureAuthForRead();
+    const snap = await firestoreDb.doc(FIRESTORE_ORG_DOC).get();
+    if (snap.exists && snap.data() && snap.data().json) { const o = JSON.parse(snap.data().json); if (!o.deaneries) o.deaneries = []; return o; }
+  } catch (e) { console.error("Fetching latest register failed", e); }
+  return null;
+}
 
 async function loadOrg() {
   if (firestoreDb) {
@@ -575,7 +586,7 @@ const App = {
   forgotError: "",
   smsReset: { active: false, step: "phone", phone: "", code: "", newPassword: "", status: "idle", error: "" },
   phoneVerify: { active: false, step: "phone", phone: "", code: "", status: "idle", error: "" },
-  register: { mode: null, step: 0, name: "", email: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" },
+  register: { mode: null, step: 0, name: "", email: "", password: "", parishName: "", parishLocation: "", parishId: "", deaneryId: "", deaneryName: "", deaneryLocation: "", level: null, localId: "", position: "", error: "" },
   view: "overview",
   sidebarOpen: false,
   viewingReportId: null,
@@ -602,8 +613,14 @@ const App = {
   parishSettingsDraft: null,
   emailReset: { active: false, status: "idle", email: "", oobCode: "", newPassword: "", error: "" },
 
+  deaneryParishId: null,
+  deaneryFilter: { parishId: "", scope: "", type: "" },
+  showNewDeanery: false,
+  refreshing: false,
+
   async init() {
     const [org, sess] = await Promise.all([loadOrg(), loadSession()]);
+    if (!org.deaneries) org.deaneries = [];
     this.org = org;
     const dl = window.location.hash.match(/^#\/([\w-]+)$/); if (dl) this.pendingView = dl[1];
     // A password-reset email link lands back here with these query params (see the
@@ -647,7 +664,7 @@ const App = {
 
   goLanding() { this.screen = "landing"; this.render(); },
   goLogin() { this.loginError = ""; this.screen = "login"; this.render(); },
-  goRegister() { this.register = { mode: null, step: 0, name: "", email: "", phone: "", password: "", parishName: "", parishLocation: "", parishId: "", level: null, localId: "", position: "", error: "" }; this.screen = "register"; this.render(); },
+  goRegister() { this.register = { mode: null, step: 0, name: "", email: "", phone: "", password: "", parishName: "", parishLocation: "", parishId: "", deaneryId: "", deaneryName: "", deaneryLocation: "", level: null, localId: "", position: "", error: "" }; this.screen = "register"; this.render(); },
 
   async doLogin(email, password) {
     this.loginError = "";
@@ -771,6 +788,92 @@ const App = {
     } catch (e) { s.status = "error"; s.error = authErrorMessage(e); this.render(); }
   },
 
+  // ---------------- Deanery level ----------------
+  // Deanery writes re-read the latest register first, so a long-open observer session
+  // can never overwrite reports other people filed in the meantime.
+  async updateOrgFresh(mutator) {
+    const latest = await fetchLatestOrg();
+    const base = latest || this.org;
+    const next = mutator(JSON.parse(JSON.stringify(base)));
+    this.org = next;
+    await persistOrg(next);
+    this.render();
+  },
+  async refreshOrg() {
+    this.refreshing = true; this.render();
+    const latest = await fetchLatestOrg();
+    if (latest) this.org = latest;
+    this.refreshing = false; this.render();
+  },
+  takenDeaneryPositions(deaneryId) { return this.org.users.filter((u) => u.level === "deanery" && u.deaneryId === deaneryId).map((u) => u.position); },
+  openDeaneryParish(id) { this.deaneryParishId = id; this.render(); window.scrollTo(0, 0); },
+
+  async joinDeanery() {
+    const r = this.register;
+    if (this.org.users.some((u) => u.email.toLowerCase() === r.email.trim().toLowerCase())) { r.error = "That email is already registered."; this.render(); return; }
+    const isNew = !r.deaneryId;
+    if (isNew) {
+      const nm = (r.deaneryName || "").trim();
+      if (!nm) { r.error = "Enter the name of the deanery."; this.render(); return; }
+      if ((this.org.deaneries || []).some((d) => d.name.trim().toLowerCase() === nm.toLowerCase())) { r.error = "A deanery with that name is already registered — choose it from the list instead."; this.render(); return; }
+    } else if (!r.position) { r.error = "Please choose a position."; this.render(); return; }
+    let userId;
+    if (firebaseAuth) {
+      try { userId = (await firebaseAuth.createUserWithEmailAndPassword(r.email.trim(), r.password)).user.uid; }
+      catch (e) { r.error = authErrorMessage(e); this.render(); return; }
+    } else { userId = uid(); }
+    const deaneryId = isNew ? uid() : r.deaneryId;
+    const position = isNew ? "President" : r.position;
+    await this.updateOrgFresh((o) => {
+      o.deaneries = o.deaneries || [];
+      if (isNew) o.deaneries.push({ id: deaneryId, name: r.deaneryName.trim(), location: (r.deaneryLocation || "").trim(), presidentId: userId, createdAt: Date.now() });
+      o.users.push({ id: userId, name: r.name, email: r.email, phone: (r.phone || "").trim(), ...(firebaseAuth ? {} : { password: r.password }), level: "deanery", position, deaneryId, parishId: null, localId: null, ...(isNew ? {} : { pendingApproval: true }), createdAt: Date.now() });
+      return o;
+    });
+    this.sessionUserId = userId; await saveSession(userId);
+    this.view = "overview"; this.screen = "app"; this.render();
+  },
+
+  async createDeanery(name, location) {
+    const user = this.currentUser(); if (!user || !user.isAdmin) return;
+    const nm = (name || "").trim(); if (!nm) return;
+    if ((this.org.deaneries || []).some((d) => d.name.trim().toLowerCase() === nm.toLowerCase())) { alert("A deanery with that name already exists."); return; }
+    await this.updateOrgFresh((o) => { o.deaneries = o.deaneries || []; o.deaneries.push({ id: uid(), name: nm, location: (location || "").trim(), presidentId: null, createdAt: Date.now() }); return o; });
+    this.showNewDeanery = false; this.render();
+  },
+  async removeDeanery(id) {
+    const user = this.currentUser(); if (!user || !user.isAdmin) return;
+    const d = deaneryById(id); if (!d) return;
+    if (this.org.parishes.some((p) => p.deaneryId === id) || this.org.users.some((u) => u.level === "deanery" && u.deaneryId === id)) { alert("Move its parishes to another deanery and remove its executives first."); return; }
+    if (!confirm(`Remove the ${d.name} deanery?`)) return;
+    await this.updateOrgFresh((o) => { o.deaneries = (o.deaneries || []).filter((x) => x.id !== id); return o; });
+  },
+  async assignParishDeanery(parishId, deaneryId) {
+    const user = this.currentUser(); if (!user || !user.isAdmin) return;
+    await this.updateOrgFresh((o) => { const p = o.parishes.find((x) => x.id === parishId); if (p) { if (deaneryId) p.deaneryId = deaneryId; else delete p.deaneryId; } return o; });
+  },
+  async approveDeaneryMember(userId) {
+    const me = this.currentUser(); const u = this.org.users.find((x) => x.id === userId);
+    if (!u || u.level !== "deanery" || !canManageDeanery(me, u.deaneryId)) return;
+    await this.updateOrgFresh((o) => {
+      const m = o.users.find((x) => x.id === userId); if (!m) return o;
+      delete m.pendingApproval;
+      if (m.position === "President") { const d = (o.deaneries || []).find((x) => x.id === m.deaneryId); if (d) d.presidentId = m.id; }
+      return o;
+    });
+  },
+  async removeDeaneryMember(userId) {
+    const me = this.currentUser(); const u = this.org.users.find((x) => x.id === userId);
+    if (!u || u.level !== "deanery" || !canManageDeanery(me, u.deaneryId)) return;
+    if (userId === me.id) { alert("You can't remove your own account here."); return; }
+    if (!confirm(`${u.pendingApproval ? "Decline" : "Remove"} ${u.name}? They won't be able to see anything in this deanery.`)) return;
+    await this.updateOrgFresh((o) => {
+      o.users = o.users.filter((x) => x.id !== userId);
+      (o.deaneries || []).forEach((d) => { if (d.presidentId === userId) d.presidentId = null; });
+      return o;
+    });
+  },
+
   hasAdmin() { return this.org.users.some((u) => u.isAdmin); },
 
   async createParish() {
@@ -784,7 +887,7 @@ const App = {
     } else { userId = uid(); }
     const parishId = uid();
     await this.updateOrg((o) => {
-      o.parishes.push({ id: parishId, name: r.parishName, location: r.parishLocation, presidentId: userId, logoDataUrl: null, createdAt: Date.now() });
+      o.parishes.push({ id: parishId, name: r.parishName, location: r.parishLocation, presidentId: userId, logoDataUrl: null, createdAt: Date.now(), ...(r.deaneryId ? { deaneryId: r.deaneryId } : {}) });
       o.users.push({ id: userId, name: r.name, email: r.email, phone: r.phone.trim(), ...(firebaseAuth ? {} : { password: r.password }), level: "parish", position: "President", parishId, localId: null, createdAt: Date.now() });
       return o;
     });
@@ -842,7 +945,7 @@ const App = {
     return [];
   },
 
-  setView(v) { AP = null; this.view = v; this.sidebarOpen = false; this.templateSavedFlash = null; this.render(); },
+  setView(v) { AP = null; if (v === "dparishes") this.deaneryParishId = null; this.view = v; this.sidebarOpen = false; this.templateSavedFlash = null; this.render(); },
   toggleSidebar(open) { this.sidebarOpen = open; this.render(); },
 
   async createLocal(name, location) {
@@ -851,7 +954,7 @@ const App = {
     this.showNewLocal = false; this.render();
   },
 
-  scopeFor(user) { return { level: user.level, id: user.level === "local" ? user.localId : user.parishId }; },
+  scopeFor(user) { return { level: user.level, id: user.level === "local" ? user.localId : user.level === "deanery" ? user.deaneryId : user.parishId }; },
   activeTemplateScope() {
     const user = this.currentUser();
     if (user.isAdmin && this.adminTemplateScope) return this.adminTemplateScope;
@@ -1068,6 +1171,7 @@ const App = {
       o.users = o.users.filter((u) => u.id !== userId);
       o.locals.forEach((l) => { if (l.presidentId === userId) l.presidentId = null; });
       o.parishes.forEach((p) => { if (p.presidentId === userId) p.presidentId = null; });
+      (o.deaneries || []).forEach((d) => { if (d.presidentId === userId) d.presidentId = null; });
       return o;
     });
   },
@@ -1223,7 +1327,7 @@ function renderLanding() {
       <div class="max-w-6xl mx-auto grid sm-grid-2" style="width:100%;gap:3.5rem;align-items:center;grid-template-columns:1fr">
         <div class="cra-fade-in">
           ${badge("gold", "Reg. No. keeps every submission accountable", "scroll")}
-          <h1 class="cra-display text-4xl" style="line-height:1.08;margin-top:1.25rem">One register for every parish, local &amp; report.</h1>
+          <h1 class="cra-display text-4xl" style="line-height:1.08;margin-top:1.25rem">One register for every deanery, parish, local &amp; report.</h1>
           <p class="text-base mt-5" style="color:var(--ink-soft);max-width:28rem">
             Secretaries, financial secretaries and treasurers fill in the standard youth council report: theme, areas of report, events, meetings, accounts and sign-offs.
             The president reviews and downloads a finished PDF — nothing gets rewritten after it's signed.
@@ -1237,7 +1341,8 @@ function renderLanding() {
           <div class="cra-label mb-4" style="color:var(--violet)">How the hierarchy works</div>
           <ol class="space-y-4 text-sm" style="list-style:none;margin:0;padding:0">
             ${[
-              ["An IT admin sets up the parish", "one account, once — registers the parish, then manages members and the executives roster."],
+              ["Deanery executives register to oversee", "the highest level — they can see (but not change) everything the parishes and locals under their deanery submit."],
+            ["An IT admin sets up the parish", "one account, once — registers the parish, then manages members and the executives roster."],
               ["A president registers each local", "under the parish before that local's officers can join."],
               ["Local &amp; parish executives register", "choosing their position — secretary, financial secretary, treasurer, and so on."],
               ["Secretaries &amp; treasurers fill in reports", "weekly, monthly, annually, or for the current programme — with the date you record."],
@@ -1409,6 +1514,11 @@ function renderRegister() {
           <div class="font-semibold mb-1">Join a parish or local</div>
           <p class="text-sm" style="color:var(--ink-soft)">Your parish is already registered. Join as a parish or local executive.</p>
         </button>
+        <button class="cra-card p-5 text-left" style="cursor:pointer" onclick="setRegMode('deanery')">
+          <div class="cra-seal mb-3" style="width:40px;height:40px">${icon("shield", 17)}</div>
+          <div class="font-semibold mb-1">Deanery executive</div>
+          <p class="text-sm" style="color:var(--ink-soft)">The highest level. Register a deanery, or join one, to observe its parishes and locals.</p>
+        </button>
       </div>
       <p class="text-sm text-center mt-6" style="color:var(--ink-soft)">Already registered? <button class="link-btn" onclick="App.goLogin()">Log in</button></p>
     `, "App.goLanding()");
@@ -1438,12 +1548,15 @@ function renderRegister() {
     `, "setRegMode(null)");
   }
 
+  if (r.mode === "deanery") return renderRegisterDeanery();
+
   if (r.mode === "new_parish") {
     return wizardShell("Register your parish", 1, 2, `
       <form class="space-y-4" onsubmit="return handleNewParishSubmit(event)">
         <div class="cra-label" style="color:var(--violet)">Parish details</div>
         ${fieldWrap("Parish name", `<input id="reg-parishName" class="cra-input" required placeholder="e.g. St. Kizito Parish" value="${esc(r.parishName)}" />`)}
         ${fieldWrap("Location", `<div class="relative">${icon("pin", 14)}<input id="reg-parishLocation" class="cra-input" style="padding-left:2rem" required placeholder="Town / city" value="${esc(r.parishLocation)}" /></div>`)}
+        ${(App.org.deaneries || []).length ? fieldWrap("Deanery", `<select id="reg-parish-deanery" class="cra-select"><option value="">Not under a deanery yet</option>${App.org.deaneries.map((d) => `<option value="${d.id}" ${r.deaneryId === d.id ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select>`, "Optional — pick your deanery so its executives can observe your parish.") : ""}
         <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details · you'll be registered as President</div>
         ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
         ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
@@ -1494,7 +1607,7 @@ function renderRegister() {
   return "";
 }
 
-function setRegMode(mode) { App.register.mode = mode; App.register.step = 0; App.register.error = ""; App.render(); }
+function setRegMode(mode) { App.register.deaneryId = ""; App.register.mode = mode; App.register.step = 0; App.register.error = ""; App.render(); }
 function setRegStep(step) { App.register.step = step; App.register.error = ""; App.render(); }
 function pickRegParish(id) { App.register.parishId = id; App.register.step = 1; App.render(); }
 function pickRegLevel(level) { App.register.level = level; App.register.position = ""; App.register.step = 2; App.render(); }
@@ -1511,6 +1624,7 @@ function handleNewParishSubmit(e) {
   e.preventDefault();
   App.register.parishName = document.getElementById("reg-parishName").value;
   App.register.parishLocation = document.getElementById("reg-parishLocation").value;
+  const dSel = document.getElementById("reg-parish-deanery"); App.register.deaneryId = dSel ? dSel.value : "";
   syncRegIdentity(); App.createParish(); return false;
 }
 function handleAdminSubmit(e) {
@@ -1534,9 +1648,11 @@ function handleJoinSubmit(e) {
 /* ==================================================================== */
 
 function ctxForReport(r) {
-  const user = App.currentUser();
-  const parish = App.org.parishes.find((p) => p.id === user.parishId);
-  return { parish, parishName: parish ? parish.name : "", localName: r.ownerLevel === "local" ? (App.org.locals.find((l) => l.id === r.ownerId) || {}).name : (r.localName || null) };
+  // Resolved from the report's own owner (not the viewer), so a deanery executive — who belongs to no parish — sees the right names.
+  const org = App.org;
+  const local = r.ownerLevel === "local" ? org.locals.find((l) => l.id === r.ownerId) : null;
+  const parish = local ? org.parishes.find((p) => p.id === local.parishId) : org.parishes.find((p) => p.id === r.ownerId);
+  return { parish, parishName: parish ? parish.name : "", localName: r.ownerLevel === "local" ? (local || {}).name : (r.localName || null) };
 }
 function downloadText(filename, text) {
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
@@ -2521,7 +2637,7 @@ function rdSubmit() {
 /*  Reports list                                                          */
 /* ==================================================================== */
 
-function reportsTableHtml(reports, showLocal, allowEdit, allowDelete) {
+function reportsTableHtml(reports, showLocal, allowEdit, allowDelete, showParish) {
   if (reports.length === 0) return emptyState("file", "No reports submitted yet", "Once your executives submit reports, they'll be listed here for review and download.");
   const user = App.currentUser();
   const ids = reports.map((r) => r.id);
@@ -2535,13 +2651,14 @@ function reportsTableHtml(reports, showLocal, allowEdit, allowDelete) {
   return `${bulkBar}<div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
     <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)">
       <th class="px-4 py-2"><input type="checkbox" ${allSelected ? "checked" : ""} onchange='App.toggleSelectAllReports(${JSON.stringify(ids)}, this.checked)' /></th>
-      <th class="px-4 py-2 cra-label">Reg. No</th><th class="px-4 py-2 cra-label">Type</th>${showLocal ? `<th class="px-4 py-2 cra-label">Local</th>` : ""}
+      <th class="px-4 py-2 cra-label">Reg. No</th><th class="px-4 py-2 cra-label">Type</th>${showParish ? `<th class="px-4 py-2 cra-label">Parish</th>` : ""}${showLocal ? `<th class="px-4 py-2 cra-label">Local</th>` : ""}
       <th class="px-4 py-2 cra-label">Submitted by</th><th class="px-4 py-2 cra-label">Period</th><th class="px-4 py-2 cra-label">Date</th><th class="px-4 py-2 cra-label text-right">Action</th>
     </tr></thead>
     <tbody>${reports.slice().reverse().map((r) => `<tr class="cra-ledger-row">
       <td class="px-4 py-3"><input type="checkbox" ${App.selectedReportIds.has(r.id) ? "checked" : ""} onchange="App.toggleReportSelect('${r.id}')" /></td>
       <td class="px-4 py-3 cra-mono text-xs">${esc(r.regNo)}</td>
       <td class="px-4 py-3">${badge(REPORT_TYPE_TONE[r.type], reportTypeLabel(r.type))}</td>
+      ${showParish ? `<td class="px-4 py-3">${esc(r.parishName || "—")}</td>` : ""}
       ${showLocal ? `<td class="px-4 py-3">${esc(r.localName || "—")}</td>` : ""}
       <td class="px-4 py-3">${esc(r.submitterName)} <span style="color:var(--ink-soft)">· ${esc(r.position)}</span></td>
       <td class="px-4 py-3">${esc(r.period || "—")}${r.editedAt ? ` <span class="text-xs" style="color:var(--ink-soft)">(edited)</span>` : ""}</td>
@@ -2568,10 +2685,10 @@ function executiveRowHtml(user) {
   </div>`;
 }
 
-function structureViewHtml(parish, local) {
+function structureViewHtml(parish, local, hideDeanery) {
   const scopeLocals = local ? [local] : App.org.locals.filter((l) => l.parishId === parish.id);
   let html = `<div class="space-y-5"><div class="cra-card cra-card-accent p-5">
-    <div class="row items-center gap-2 mb-3">${icon("landmark", 16)}<h3 class="cra-display text-lg">${esc(parish.name)}</h3>${badge("gold", parish.location)}</div>
+    <div class="row items-center gap-2 mb-3">${icon("landmark", 16)}<h3 class="cra-display text-lg">${esc(parish.name)}</h3>${badge("gold", parish.location)}${!hideDeanery && parish.deaneryId && deaneryById(parish.deaneryId) ? badge("wine", deaneryById(parish.deaneryId).name + " Deanery") : ""}</div>
     <div class="divide-line">${App.org.users.filter((u) => u.level === "parish" && u.parishId === parish.id).map(executiveRowHtml).join("")}</div>
   </div>`;
   if (!local) {
@@ -2719,7 +2836,7 @@ function handleParishSettingsSubmit(e) { e.preventDefault(); App.saveParishSetti
 
 function profileViewHtml() {
   const user = App.currentUser();
-  const isFinancial = user.position === "Financial Secretary" || user.position === "Treasurer";
+  const isFinancial = (user.position === "Financial Secretary" || user.position === "Treasurer") && user.level !== "deanery";
   const pv = App.phoneVerify;
   return `${pageHeader("Account", "My profile", "Your signature appears on reports you submit and on the president's downloaded PDFs.")}
   <div class="cra-card cra-card-accent p-5 max-w-md space-y-5">
@@ -2730,7 +2847,7 @@ function profileViewHtml() {
       ${user.signatureDataUrl ? `<img class="sig-thumb mb-2" src="${user.signatureDataUrl}" />` : `<p class="text-xs mb-2" style="color:var(--ink-soft)">No signature uploaded yet.</p>`}
       <label class="cra-btn cra-btn-secondary relative" style="cursor:pointer">${icon("pen", 13)} ${user.signatureDataUrl ? "Replace signature" : "Upload signature"}<input type="file" accept="image/*" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="App.uploadSignature(this.files[0])" /></label>
     </div>
-    ${reportTypesForPosition(user.position).length ? `<div>
+    ${reportTypesForUser(user).length ? `<div>
       <div class="cra-label mb-2">Report watermark <span style="text-transform:none;font-weight:400">(optional)</span></div>
       <p class="text-xs mb-2" style="color:var(--ink-soft)">Appears faintly behind the pages of reports you submit. Without one, the default GODYC watermark is used.</p>
       ${user.watermarkDataUrl ? `<img src="${user.watermarkDataUrl}" style="max-height:80px;max-width:160px;opacity:0.35;display:block" class="mb-2" />` : `<p class="text-xs mb-2" style="color:var(--ink-soft)">Using the default watermark.</p>`}
@@ -2855,15 +2972,301 @@ function handleReportHeadingSubmit(e, level, id) {
 /*  App shell                                                              */
 /* ==================================================================== */
 
+/* ==================================================================== */
+/*  Deanery level — the highest tier. Deanery executives register under   */
+/*  a deanery and get a read-only view of every parish and local in it.   */
+/* ==================================================================== */
+
+function deaneryById(id) { return (App.org.deaneries || []).find((d) => d.id === id) || null; }
+function canManageDeanery(user, deaneryId) {
+  return !!user && (!!user.isAdmin || (user.level === "deanery" && user.deaneryId === deaneryId && user.position === "President" && !user.pendingApproval));
+}
+function reportTypesForUser(user) { return user && user.level === "deanery" ? [] : reportTypesForPosition(user ? user.position : ""); }
+
+// Everything that sits under one deanery: its parishes, their locals, and every report they've filed
+// (each report copy carries the parish/local names so tables can show where it came from).
+function deaneryScope(deaneryId) {
+  const org = App.org;
+  const parishes = org.parishes.filter((p) => p.deaneryId === deaneryId);
+  const pIds = parishes.map((p) => p.id);
+  const locals = org.locals.filter((l) => pIds.includes(l.parishId));
+  const lIds = locals.map((l) => l.id);
+  const reports = org.reports
+    .filter((r) => (r.ownerLevel === "parish" && pIds.includes(r.ownerId)) || (r.ownerLevel === "local" && lIds.includes(r.ownerId)))
+    .map((r) => {
+      const l = r.ownerLevel === "local" ? locals.find((x) => x.id === r.ownerId) : null;
+      const p = r.ownerLevel === "local" ? parishes.find((x) => x.id === (l && l.parishId)) : parishes.find((x) => x.id === r.ownerId);
+      return { ...r, parishId: p ? p.id : null, parishName: p ? p.name : "—", localName: l ? l.name : null };
+    });
+  const users = org.users.filter((u) => (u.level === "parish" && pIds.includes(u.parishId)) || (u.level === "local" && lIds.includes(u.localId)));
+  return { parishes, locals, reports, users };
+}
+function lastReportAt(list) { return list.reduce((m, r) => Math.max(m, r.submittedAt || 0), 0); }
+function plural(n, word) { return `${n} ${word}${n !== 1 ? "s" : ""}`; }
+function refreshBtnHtml() { return btnHtml({ variant: "ghost", label: App.refreshing ? "Refreshing…" : "Refresh", iconName: "loader", attrs: `onclick="App.refreshOrg()" ${App.refreshing ? "disabled" : ""}` }); }
+
+function deaneryNavItems(user) {
+  const items = [
+    { id: "overview", label: "Overview", iconName: "home" },
+    { id: "dparishes", label: "Parishes & locals", iconName: "landmark" },
+    { id: "dreports", label: "All reports", iconName: "file" },
+    { id: "dstructure", label: "Structure", iconName: "users" },
+  ];
+  if (user.position === "President") {
+    const pending = App.org.users.filter((u) => u.level === "deanery" && u.deaneryId === user.deaneryId && u.pendingApproval).length;
+    items.push({ id: "dteam", label: pending ? `Deanery team (${pending})` : "Deanery team", iconName: "userPlus" });
+  }
+  items.push({ id: "profile", label: "My profile", iconName: "pen" });
+  return items;
+}
+
+function deaneryContentHtml(user, deanery) {
+  if (!deanery) return emptyState("landmark", "Your deanery couldn't be found", "It may have been removed. Contact the IT admin.");
+  const v = App.view;
+  if (v === "dparishes") return deaneryParishesHtml(deanery);
+  if (v === "dreports") return deaneryReportsHtml(deanery);
+  if (v === "dstructure") return deaneryStructureHtml(deanery);
+  if (v === "dteam" && user.position === "President") return deaneryTeamHtml(user, deanery);
+  if (v === "profile") return profileViewHtml();
+  return deaneryOverviewHtml(user, deanery);
+}
+
+function deaneryOverviewHtml(user, deanery) {
+  const sc = deaneryScope(deanery.id);
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const recent = sc.reports.filter((r) => (r.submittedAt || 0) >= Date.now() - 30 * 86400000).length;
+  const stats = statCard("landmark", "Parishes", sc.parishes.length) + statCard("building", "Locals", sc.locals.length)
+    + statCard("file", "Reports received", sc.reports.length) + statCard("scroll", "Reports in last 30 days", recent);
+  const latest = sc.reports.slice().sort((a, b) => (a.submittedAt || 0) - (b.submittedAt || 0)).slice(-8);
+  const cards = [
+    ["landmark", "Parishes & locals", "See each parish and local, who serves in them, and what they've reported.", "dparishes"],
+    ["eye", "Review all reports", "Read and download any report filed under your deanery.", "dreports"],
+    ["users", "View the structure", "The deanery, its parishes and locals, arranged by rank.", "dstructure"],
+  ].map(([ic, t, d, view]) => `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.setView('${view}')">${icon(ic, 18)}<div class="font-semibold mb-1 mt-2">${t}</div><p class="text-sm" style="color:var(--ink-soft)">${d}</p></button>`).join("");
+  return `${pageHeader(todayDisplay(), `${greeting}, ${user.name.split(" ")[0]}`, `${user.position} · ${deanery.name} Deanery`, refreshBtnHtml())}
+  <div class="grid grid-4 sm-grid-4 mb-8">${stats}</div>
+  <div class="grid sm-grid-2 mb-8">${cards}</div>
+  <div class="cra-label mb-2">Latest activity across the deanery</div>
+  ${sc.parishes.length === 0
+    ? emptyState("landmark", "No parishes in your deanery yet", "Parishes show up here once they choose this deanery when registering, or the IT admin assigns them.")
+    : sc.reports.length === 0 ? emptyState("file", "Nothing reported yet", "Reports will appear here as soon as secretaries and treasurers in your parishes and locals submit them.")
+    : reportsTableHtml(latest, true, false, false, true)}`;
+}
+
+function deaneryParishesHtml(deanery) {
+  if (App.deaneryParishId) return deaneryParishDetailHtml(deanery, App.deaneryParishId);
+  const sc = deaneryScope(deanery.id);
+  let h = pageHeader("Deanery", "Parishes & locals", "Every parish in your deanery and the locals under it. Open a parish to see its executives, locals, reports and action plans.", refreshBtnHtml());
+  if (!sc.parishes.length) return h + emptyState("landmark", "No parishes in this deanery yet", "Parishes appear here once they choose this deanery when registering, or the IT admin assigns them.");
+  return h + `<div class="grid sm-grid-2">${sc.parishes.map((p) => {
+    const locals = sc.locals.filter((l) => l.parishId === p.id);
+    const reps = sc.reports.filter((r) => r.parishId === p.id);
+    const execs = sc.users.filter((u) => u.parishId === p.id).length;
+    const last = lastReportAt(reps);
+    return `<button class="cra-card p-5 text-left" style="cursor:pointer" onclick="App.openDeaneryParish('${p.id}')">
+      <div class="row items-center gap-3 mb-2">
+        <div class="cra-seal" style="width:40px;height:40px">${p.logoDataUrl ? `<img src="${p.logoDataUrl}" />` : icon("landmark", 17)}</div>
+        <div class="flex-1"><div class="font-semibold">${esc(p.name)}</div><div class="text-xs" style="color:var(--ink-soft)">${esc(p.location || "")}</div></div>
+        ${icon("chevronRight", 16)}
+      </div>
+      <div class="row wrap gap-2 mt-3">${badge("violet", plural(locals.length, "local"))}${badge("violet", plural(execs, "executive"))}${badge("green", plural(reps.length, "report"))}${!p.presidentId ? badge("wine", "No president yet") : ""}</div>
+      <div class="text-xs mt-3" style="color:var(--ink-soft)">${last ? `Last report ${new Date(last).toLocaleDateString()}` : "No reports yet"}</div>
+    </button>`;
+  }).join("")}</div>`;
+}
+
+function deaneryParishDetailHtml(deanery, pid) {
+  const org = App.org;
+  const p = org.parishes.find((x) => x.id === pid && x.deaneryId === deanery.id);
+  if (!p) { App.deaneryParishId = null; return deaneryParishesHtml(deanery); }
+  const sc = deaneryScope(deanery.id);
+  const locals = sc.locals.filter((l) => l.parishId === p.id);
+  const reps = sc.reports.filter((r) => r.parishId === p.id);
+  const t = themeRec(p.id);
+  const themeActive = t && t.text && !(t.to && todayISODate() > t.to);
+  const th = "padding:8px 12px;background:#f5f3ea;border-bottom:1px solid var(--line)";
+  const localRows = locals.map((l) => {
+    const lr = reps.filter((r) => r.ownerLevel === "local" && r.ownerId === l.id);
+    const execs = org.users.filter((u) => u.level === "local" && u.localId === l.id).length;
+    const last = lastReportAt(lr);
+    return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(l.name)}<div class="text-xs" style="color:var(--ink-soft)">${esc(l.location || "")}</div></td>
+      <td class="px-4 py-3">${execs}</td><td class="px-4 py-3">${lr.length}</td>
+      <td class="px-4 py-3 text-xs">${last ? new Date(last).toLocaleDateString() : badge("wine", "No reports yet")}</td>
+      <td class="px-4 py-3">${l.presidentId ? badge("green", "Has president") : badge("wine", "No president")}</td></tr>`;
+  }).join("");
+  let h = `<button class="row items-center gap-1 text-sm mb-4" style="color:var(--ink-soft);cursor:pointer" onclick="App.openDeaneryParish(null)">${icon("arrowLeft", 14)} All parishes</button>`;
+  h += pageHeader("Parish", p.name, p.location || "", refreshBtnHtml());
+  if (themeActive) h += `<div class="cra-card cra-card-accent p-5 mb-5"><div class="cra-label mb-1">Theme of the year</div><div class="cra-display text-xl" style="color:var(--violet)">“${esc(t.text)}”</div></div>`;
+  h += `<div class="grid grid-4 sm-grid-4 mb-6">${statCard("building", "Locals", locals.length)}${statCard("users", "Executives", sc.users.filter((u) => u.parishId === p.id).length)}${statCard("file", "Reports", reps.length)}${statCard("scroll", "Last report", lastReportAt(reps) ? new Date(lastReportAt(reps)).toLocaleDateString() : "—")}</div>`;
+  h += `<div class="cra-label mb-2">Locals — activity</div>`;
+  h += locals.length ? `<div class="cra-card mb-6" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm"><thead><tr><th class="cra-label" style="${th}">Local</th><th class="cra-label" style="${th}">Executives</th><th class="cra-label" style="${th}">Reports</th><th class="cra-label" style="${th}">Last report</th><th class="cra-label" style="${th}">President</th></tr></thead><tbody>${localRows}</tbody></table></div></div>`
+    : `<p class="text-sm mb-6" style="color:var(--ink-soft)">This parish hasn't registered any locals yet.</p>`;
+  h += `<div class="cra-label mb-2">Reports from this parish and its locals</div>`;
+  h += reps.length ? reportsTableHtml(reps, true, false, false, false) : `<p class="text-sm mb-6" style="color:var(--ink-soft)">No reports submitted yet.</p>`;
+  h += `<div class="cra-label mb-2 mt-6">Action plans</div>`;
+  h += deaneryPlansHtml(p, locals);
+  h += `<div class="cra-label mb-2 mt-6">Executives</div>`;
+  h += structureViewHtml(p, null, true);
+  return h;
+}
+
+function deaneryPlansHtml(parish, locals) {
+  const t = themeRec(parish.id);
+  if (!t || !t.id) return `<p class="text-sm" style="color:var(--ink-soft)">No theme of the year has been set for this parish yet, so there are no action plans.</p>`;
+  const scopes = [{ level: "parish", id: parish.id, name: parish.name }].concat(locals.map((l) => ({ level: "local", id: l.id, name: l.name })));
+  return scopes.map((s) => {
+    const pl = (App.org.actionPlans || []).find((x) => x.ownerLevel === s.level && x.ownerId === s.id && x.themeId === t.id);
+    return `<div class="cra-card p-5 mb-4"><div class="row items-center justify-between mb-3 wrap gap-2"><h3 class="cra-display text-lg">${esc(s.name)}</h3>${pl ? `<span class="text-xs" style="color:var(--ink-soft)">Updated by ${esc(pl.updatedByName)} · ${new Date(pl.updatedAt).toLocaleDateString()}</span>` : badge("gold", "Not submitted")}</div>${planTableHtml(pl ? pl.rows : [])}</div>`;
+  }).join("");
+}
+
+function deaneryReportsHtml(deanery) {
+  const sc = deaneryScope(deanery.id);
+  const f = App.deaneryFilter;
+  let list = sc.reports;
+  if (f.parishId) list = list.filter((r) => r.parishId === f.parishId);
+  if (f.scope) list = list.filter((r) => r.ownerLevel === f.scope);
+  if (f.type) list = list.filter((r) => r.type === f.type);
+  const sel = (key, opts, allLabel) => `<div style="min-width:11rem"><select class="cra-select" onchange="App.deaneryFilter.${key}=this.value; App.render()"><option value="">${allLabel}</option>${opts.map(([v, l]) => `<option value="${esc(v)}" ${f[key] === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`;
+  const filters = `<div class="row wrap gap-3 mb-5">
+    ${sel("parishId", sc.parishes.map((p) => [p.id, p.name]), "All parishes")}
+    ${sel("scope", [["parish", "Parish-level reports"], ["local", "Local-level reports"]], "Parish &amp; local")}
+    ${sel("type", Object.keys(REPORT_TYPE_LABELS).map((k) => [k, REPORT_TYPE_LABELS[k]]), "All report types")}
+  </div>`;
+  let h = pageHeader("Read only", "All reports", "Every report submitted by the parishes and locals in your deanery. Open one to read it or download a filled PDF.", refreshBtnHtml());
+  if (!sc.reports.length) return h + emptyState("file", "No reports submitted yet", "Reports from your parishes and locals will be listed here for review and download.");
+  h += filters;
+  return h + (list.length ? reportsTableHtml(list, true, false, false, true) : emptyState("file", "No reports match", "Try changing the filters above."));
+}
+
+function deaneryStructureHtml(deanery) {
+  const org = App.org;
+  const sc = deaneryScope(deanery.id);
+  const order = POSITIONS;
+  const execs = org.users.filter((u) => u.level === "deanery" && u.deaneryId === deanery.id && !u.pendingApproval)
+    .sort((a, b) => { const ia = order.indexOf(a.position), ib = order.indexOf(b.position); return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib); });
+  let h = pageHeader("Hierarchy", `${deanery.name} Deanery`, "The deanery, its parishes and the locals beneath them — arranged by rank.");
+  h += `<div class="cra-card cra-card-accent p-5 mb-6"><div class="row items-center gap-2 mb-3">${icon("landmark", 16)}<h3 class="cra-display text-lg">${esc(deanery.name)}</h3>${badge("wine", "Deanery")}${deanery.location ? badge("gold", deanery.location) : ""}</div>
+    <div class="divide-line">${execs.length ? execs.map(executiveRowHtml).join("") : `<p class="text-xs py-2" style="color:var(--ink-soft)">No executives registered yet.</p>`}</div></div>`;
+  if (!sc.parishes.length) return h + emptyState("landmark", "No parishes in this deanery yet", "Parishes appear here once they choose this deanery when registering, or the IT admin assigns them.");
+  return h + `<div class="cra-label mb-2">Parishes under this deanery</div><div class="space-y-5">${sc.parishes.map((p) => structureViewHtml(p, null, true)).join("")}</div>`;
+}
+
+function deaneryMembersTableHtml(members, user, showDeanery) {
+  if (!members.length) return `<p class="text-sm" style="color:var(--ink-soft)">No deanery executives registered yet.</p>`;
+  return `<div class="cra-card" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm">
+    <thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Name</th><th class="px-4 py-2 cra-label">Email</th>${showDeanery ? `<th class="px-4 py-2 cra-label">Deanery</th>` : ""}<th class="px-4 py-2 cra-label">Position</th><th class="px-4 py-2 cra-label">Status</th><th class="px-4 py-2 cra-label text-right">Action</th></tr></thead>
+    <tbody>${members.map((u) => {
+      const d = deaneryById(u.deaneryId);
+      const manage = canManageDeanery(user, u.deaneryId) && u.id !== user.id;
+      return `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(u.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(u.email)}</td>
+        ${showDeanery ? `<td class="px-4 py-3">${esc(d ? d.name : "—")}</td>` : ""}
+        <td class="px-4 py-3">${badge("violet", u.position)}</td>
+        <td class="px-4 py-3">${u.pendingApproval ? badge("gold", "Awaiting approval") : badge("green", "Active")}</td>
+        <td class="px-4 py-3 text-right"><div class="row gap-2 justify-end">
+          ${manage && u.pendingApproval ? btnHtml({ variant: "primary", label: "Approve", iconName: "check", size: 12, extraClass: "cra-btn-sm", attrs: `onclick="App.approveDeaneryMember('${u.id}')"` }) : ""}
+          ${manage ? btnHtml({ variant: "danger", label: u.pendingApproval ? "Decline" : "Remove", iconName: "trash", size: 12, extraClass: "cra-btn-sm", attrs: `onclick="App.removeDeaneryMember('${u.id}')"` }) : ""}
+        </div></td></tr>`;
+    }).join("")}</tbody></table></div></div>`;
+}
+
+function deaneryTeamHtml(user, deanery) {
+  const members = App.org.users.filter((u) => u.level === "deanery" && u.deaneryId === deanery.id);
+  return `${pageHeader("Deanery President", "Deanery team", "New deanery executives are held here until you approve them. Nobody sees any parish or local data until they're approved.")}
+  ${deaneryMembersTableHtml(members.sort((a, b) => (b.pendingApproval ? 1 : 0) - (a.pendingApproval ? 1 : 0)), user, false)}`;
+}
+
+function adminDeaneriesViewHtml() {
+  const org = App.org; const user = App.currentUser();
+  const ds = org.deaneries || [];
+  let h = pageHeader("IT Admin", "Deaneries", "A deanery sits above its parishes. Create deaneries, place each parish under one, and approve deanery executives.",
+    btnHtml({ variant: "primary", label: "Add deanery", iconName: "plus", attrs: `onclick="App.showNewDeanery=true; App.render()"` }));
+  if (!ds.length) h += emptyState("landmark", "No deaneries yet", "Add a deanery, or let a deanery executive register one themselves from the Register screen.");
+  else h += `<div class="grid sm-grid-2 mb-8">${ds.map((d) => {
+    const ps = org.parishes.filter((p) => p.deaneryId === d.id).length;
+    const ex = org.users.filter((u) => u.level === "deanery" && u.deaneryId === d.id).length;
+    return `<div class="cra-card p-4"><div class="row items-center gap-2 mb-1">${icon("landmark", 15)}<span class="font-semibold flex-1">${esc(d.name)}</span><button class="cra-btn cra-btn-ghost cra-btn-icon" title="Remove deanery" onclick="App.removeDeanery('${d.id}')">${icon("trash", 13)}</button></div>
+      <div class="text-xs mb-3" style="color:var(--ink-soft)">${esc(d.location || "")}</div>
+      <div class="row gap-2 wrap">${badge("violet", plural(ps, "parish"))}${badge("violet", plural(ex, "executive"))}${!d.presidentId ? badge("wine", "No president yet") : ""}</div></div>`;
+  }).join("")}</div>`;
+  h += `<div class="cra-label mb-2">Which deanery does each parish belong to?</div>`;
+  h += org.parishes.length ? `<div class="cra-card mb-8" style="overflow:hidden"><div class="overflow-x-auto"><table class="text-sm"><thead><tr style="background:#f5f3ea;border-bottom:1px solid var(--line)"><th class="px-4 py-2 cra-label">Parish</th><th class="px-4 py-2 cra-label">Location</th><th class="px-4 py-2 cra-label">Deanery</th></tr></thead><tbody>
+    ${org.parishes.map((p) => `<tr class="cra-ledger-row"><td class="px-4 py-3 font-medium">${esc(p.name)}</td><td class="px-4 py-3 text-xs" style="color:var(--ink-soft)">${esc(p.location || "")}</td>
+      <td class="px-4 py-3"><select class="cra-select" onchange="App.assignParishDeanery('${p.id}', this.value)"><option value="">Not under a deanery</option>${ds.map((d) => `<option value="${d.id}" ${p.deaneryId === d.id ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select></td></tr>`).join("")}
+    </tbody></table></div></div>` : `<p class="text-sm mb-8" style="color:var(--ink-soft)">No parishes registered yet.</p>`;
+  h += `<div class="cra-label mb-2">Deanery executives</div>`;
+  h += deaneryMembersTableHtml(org.users.filter((u) => u.level === "deanery").sort((a, b) => (b.pendingApproval ? 1 : 0) - (a.pendingApproval ? 1 : 0)), user, true);
+  return h;
+}
+
+function newDeaneryModalHtml() {
+  return `<div class="modal-overlay" onmousedown="if(event.target===event.currentTarget) App.showNewDeanery=false, App.render()">
+    <div class="cra-paper modal-box cra-fade-in max-w-md" style="border:1px solid var(--line)">
+      <div class="row items-center justify-between px-5 py-4" style="border-bottom:1px solid var(--line)"><h3 class="cra-display text-lg">Add a deanery</h3><button class="cra-btn cra-btn-ghost cra-btn-icon" onclick="App.showNewDeanery=false; App.render()">${icon("x", 16)}</button></div>
+      <div class="p-5"><form class="space-y-4" onsubmit="return handleNewDeanerySubmit(event)">
+        ${fieldWrap("Deanery name", `<input id="newdeanery-name" class="cra-input" required placeholder="e.g. St. Peter Deanery" />`)}
+        ${fieldWrap("Location", `<input id="newdeanery-location" class="cra-input" placeholder="Area / region" />`)}
+        <p class="text-xs" style="color:var(--ink-soft)">Once added, deanery executives can pick it when they register, and parishes can be placed under it.</p>
+        ${btnHtml({ variant: "primary", label: "Add deanery", iconName: "plus", extraClass: "w-full", attrs: `type="submit"` })}
+      </form></div>
+    </div></div>`;
+}
+function handleNewDeanerySubmit(e) { e.preventDefault(); App.createDeanery(document.getElementById("newdeanery-name").value, document.getElementById("newdeanery-location").value); return false; }
+
+function renderPendingApproval(user) {
+  const d = deaneryById(user.deaneryId);
+  return `<div class="col items-center cra-bg" style="min-height:100vh;justify-content:center;padding:2.5rem 1rem">
+    <div class="w-full max-w-lg cra-fade-in"><div class="cra-card cra-card-accent p-7">
+      ${emptyState("shield", "Waiting for approval", `Your registration for ${d ? d.name + " Deanery" : "the deanery"} was received. A deanery President or the IT admin has to approve it before you can see anything. Check back shortly.`,
+        `<div class="row gap-2 justify-center wrap">${btnHtml({ variant: "primary", label: App.refreshing ? "Checking…" : "Check again", iconName: "check", attrs: `onclick="App.refreshOrg()" ${App.refreshing ? "disabled" : ""}` })}${btnHtml({ variant: "ghost", label: "Log out", iconName: "logout", attrs: `onclick="App.doLogout()"` })}</div>`)}
+    </div></div></div>`;
+}
+
+// ---- Registration screen helpers (deanery mode) ----
+function syncDeaneryDraft() {
+  const r = App.register;
+  [["reg-name", "name"], ["reg-email", "email"], ["reg-phone", "phone"], ["reg-password", "password"], ["reg-deaneryName", "deaneryName"], ["reg-deaneryLocation", "deaneryLocation"], ["reg-position", "position"]].forEach(([id, key]) => {
+    const el = document.getElementById(id); if (el) r[key] = el.value;
+  });
+}
+function pickRegDeanery(id) { syncDeaneryDraft(); App.register.deaneryId = id; App.register.position = ""; App.render(); }
+function handleDeaneryJoinSubmit(e) { e.preventDefault(); syncDeaneryDraft(); App.joinDeanery(); return false; }
+function renderRegisterDeanery() {
+  const r = App.register;
+  const deaneries = App.org.deaneries || [];
+  const isNew = !r.deaneryId;
+  const free = !isNew ? POSITIONS.filter((p) => !App.takenDeaneryPositions(r.deaneryId).includes(p)) : [];
+  return wizardShell("Register as a deanery executive", 1, 2, `
+    <p class="text-sm mb-4" style="color:var(--ink-soft)">The deanery is the highest level. Deanery executives can view &mdash; but not change &mdash; everything the parishes and locals under them submit.</p>
+    <form class="space-y-4" onsubmit="return handleDeaneryJoinSubmit(event)">
+      ${fieldWrap("Deanery", `<select id="reg-deaneryId" class="cra-select" onchange="pickRegDeanery(this.value)"><option value="">Register a new deanery…</option>${deaneries.map((d) => `<option value="${d.id}" ${r.deaneryId === d.id ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select>`)}
+      ${isNew ? `${fieldWrap("Deanery name", `<input id="reg-deaneryName" class="cra-input" required placeholder="e.g. St. Peter Deanery" value="${esc(r.deaneryName)}" />`)}
+        ${fieldWrap("Location", `<input id="reg-deaneryLocation" class="cra-input" placeholder="Area / region" value="${esc(r.deaneryLocation)}" />`)}
+        <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details · you'll be registered as the deanery's President</div>`
+      : `${fieldWrap("Position", `<select id="reg-position" class="cra-select" required onchange="App.register.position=this.value"><option value="">Select your position…</option>${free.map((p) => `<option value="${p}" ${r.position === p ? "selected" : ""}>${p}</option>`).join("")}</select>${free.length === 0 ? `<p class="text-xs mt-1" style="color:var(--danger)">Every position here is already taken.</p>` : ""}`, "A deanery President or the IT admin approves new executives before they can see anything.")}
+        <div class="cra-label" style="color:var(--violet);padding-top:0.5rem">Your details</div>`}
+      ${fieldWrap("Full name", `<input id="reg-name" class="cra-input" required value="${esc(r.name)}" />`)}
+      ${fieldWrap("Email", `<input id="reg-email" class="cra-input" type="email" required value="${esc(r.email)}" />`)}
+      ${fieldWrap("Phone number", `<input id="reg-phone" class="cra-input" type="tel" placeholder="e.g. 024 123 4567" value="${esc(r.phone)}" />`, "Optional now — lets you verify it later for SMS-based password reset.")}
+      ${fieldWrap("Password", `<input id="reg-password" class="cra-input" type="password" required minlength="6" value="${esc(r.password)}" />`)}
+      ${r.error ? errorNote(r.error) : ""}
+      ${btnHtml({ variant: "primary", label: isNew ? "Register deanery &amp; create my account" : "Request to join", extraClass: "w-full", attrs: `type="submit" ${!isNew && free.length === 0 ? "disabled" : ""}` })}
+    </form>`, "setRegMode(null)");
+}
+
 function renderApp() {
   const user = App.currentUser();
   if (!user) { App.screen = "landing"; return renderLanding(); }
   const org = App.org;
-  const parish = org.parishes.find((p) => p.id === user.parishId);
+  const isDeanery = user.level === "deanery";
+  if (isDeanery && user.pendingApproval) return renderPendingApproval(user);
+  const deanery = isDeanery ? deaneryById(user.deaneryId) : null;
+  const parish = isDeanery ? { name: deanery ? deanery.name + " Deanery" : "Deanery", logoDataUrl: null } : org.parishes.find((p) => p.id === user.parishId);
   const local = user.localId ? org.locals.find((l) => l.id === user.localId) : null;
   const isPresident = user.position === "President";
   const isAdmin = !!user.isAdmin;
-  const reportTypes = reportTypesForPosition(user.position);
+  const reportTypes = reportTypesForUser(user);
   const { level: scopeLevel, id: scopeId } = App.scopeFor(user);
 
   const myLocals = user.level === "parish" ? org.locals.filter((l) => l.parishId === user.parishId) : [];
@@ -2872,7 +3275,7 @@ function renderApp() {
   const mySubmissions = org.reports.filter((r) => r.submittedBy === user.id);
 
   const nav = [{ id: "overview", label: "Overview", iconName: "home" }];
-  if (isAdmin) { nav.push({ id: "members", label: "Members", iconName: "users" }); }
+  if (isAdmin) { nav.push({ id: "members", label: "Members", iconName: "users" }); nav.push({ id: "deaneries", label: "Deaneries", iconName: "landmark" }); }
   if ((user.level === "parish" && isPresident) || isAdmin) nav.push({ id: "locals", label: "Locals", iconName: "building" });
   if (isPresident) nav.push({ id: "reports", label: user.level === "parish" ? "All reports" : "Local reports", iconName: "file" });
   if (isAdmin) nav.push({ id: "reports", label: "All reports", iconName: "file" });
@@ -2884,16 +3287,21 @@ function renderApp() {
   nav.push({ id: "actionplan", label: "Action plan", iconName: "clipboard" });
   nav.push({ id: "structure", label: "Structure", iconName: "users" });
   nav.push({ id: "profile", label: "My profile", iconName: "pen" });
+  if (isDeanery) nav.splice(0, nav.length, ...deaneryNavItems(user));
 
   const initials = user.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
   const activeNavId = App.view === "submit" ? `submit:${App.submitType}` : App.view;
 
   pwaHook(nav, org.parishes.find((p) => p.id === user.parishId));
   let content = "";
-  if (App.view === "overview") {
+  if (isDeanery) {
+    content = deaneryContentHtml(user, deanery);
+  } else if (App.view === "overview") {
     content = overviewPanelHtml({ user, parish, local, myLocals, myOwnReports, myLocalReports, mySubmissions, reportTypes, isPresident, isAdmin });
   } else if (App.view === "members" && isAdmin) {
     content = membersViewHtml();
+  } else if (App.view === "deaneries" && isAdmin) {
+    content = adminDeaneriesViewHtml();
   } else if (App.view === "parishsettings" && isAdmin) {
     content = parishSettingsViewHtml();
   } else if (App.view === "roster" && isAdmin) {
@@ -2956,7 +3364,7 @@ function renderApp() {
       <div class="px-4 py-4" style="border-top:1px solid rgba(255,255,255,0.1)">
         <div class="row items-center gap-2 mb-3">
           <div class="cra-seal" style="width:30px;height:30px;font-size:11px;border-color:var(--gold)">${initials}</div>
-          <div class="flex-1" style="min-width:0"><div class="text-xs font-medium truncate" style="color:#fff">${esc(user.name)}</div><div class="text-xs truncate" style="color:#c9c3e6">${esc(isAdmin ? "IT Admin" : user.position)} · ${user.level === "parish" ? "Parish" : user.level === "local" ? "Local" : "Admin"}</div></div>
+          <div class="flex-1" style="min-width:0"><div class="text-xs font-medium truncate" style="color:#fff">${esc(user.name)}</div><div class="text-xs truncate" style="color:#c9c3e6">${esc(isAdmin ? "IT Admin" : user.position)} · ${user.level === "parish" ? "Parish" : user.level === "local" ? "Local" : user.level === "deanery" ? "Deanery" : "Admin"}</div></div>
         </div>
         <button class="cra-nav-item w-full" onclick="shortcutToScreen()">${icon("pin", 15)} Shortcut to this screen</button>
         ${isStandalone() ? "" : `<button class="cra-nav-item w-full" onclick="installApp()">${icon("download", 15)} Add to home screen</button>`}
@@ -2975,7 +3383,8 @@ function renderApp() {
   </div>
   ${viewingReport ? reportViewModalHtml(viewingReport) : ""}
   ${App.showNewLocal ? newLocalModalHtml() : ""}
-  ${App.showAddMember ? addMemberModalHtml() : ""}`;
+  ${App.showAddMember ? addMemberModalHtml() : ""}
+  ${App.showNewDeanery ? newDeaneryModalHtml() : ""}`;
 }
 
 /* ==================================================================== */
